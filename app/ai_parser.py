@@ -1,444 +1,439 @@
-import re
+import requests
 import json
-from datetime import datetime, timedelta, date
-from typing import Optional, Dict, Any, List, Tuple
 import logging
-import calendar
+from typing import List, Dict, Optional, Any
+from dataclasses import dataclass
+from datetime import datetime
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class AdvancedAIDateParser:
-    def __init__(self):
-        """Initialize the advanced AI date parser"""
-        self.today = datetime.now().date()
+@dataclass
+class ChecklistItem:
+    """Data class for checklist items"""
+    id: str
+    name: str
+    state: str
+    card_id: str
+    card_name: str
+    checklist_id: str
+    checklist_name: str
+    board_id: str
+    board_name: str
+
+@dataclass
+class TrelloCard:
+    """Data class for Trello cards"""
+    id: str
+    name: str
+    desc: str
+    due: Optional[str]
+    board_id: str
+    board_name: str
+    list_id: str
+    list_name: str
+    checklists: List[Dict]
+
+class TrelloAPI:
+    """Trello API client for fetching cards and checklist items"""
+    
+    def __init__(self, api_key: str, token: str):
+        self.api_key = api_key.strip()
+        self.token = token.strip()
+        self.base_url = "https://api.trello.com/1"
+        self.auth_params = {
+            'key': self.api_key,
+            'token': self.token
+        }
         
-        # Enhanced patterns with better logic
-        self.time_patterns = {
-            # Immediate urgency
-            'immediate': {
-                'patterns': ['asap', 'urgent', 'critical', 'emergency', 'now', 'immediately', 'right away', 'urgent!'],
-                'base_days': 0,
-                'urgency': 10
-            },
-            # Today/tomorrow
-            'today': {
-                'patterns': ['today', 'by today', 'end of today', 'eod', 'end of day'],
-                'base_days': 0,
-                'urgency': 9
-            },
-            'tomorrow': {
-                'patterns': ['tomorrow', 'by tomorrow', 'next day', 'tmrw'],
-                'base_days': 1,
-                'urgency': 8
-            },
-            # This week
-            'this_week': {
-                'patterns': ['this week', 'end of week', 'by friday', 'this friday', 'eow'],
-                'base_days': self._days_until_friday(),
-                'urgency': 7
-            },
-            # Next week
-            'next_week': {
-                'patterns': ['next week', 'following week', 'next monday'],
-                'base_days': 7 + self._days_until_monday(),
-                'urgency': 6
-            },
-            # Biweekly
-            'biweekly': {
-                'patterns': ['in two weeks', 'biweekly', '2 weeks', 'two weeks'],
-                'base_days': 14,
-                'urgency': 5
-            },
-            # Monthly
-            'end_of_month': {
-                'patterns': ['end of month', 'month end', 'by month end', 'eom'],
-                'base_days': self._days_until_month_end(),
-                'urgency': 4
-            },
-            'next_month': {
-                'patterns': ['next month', 'following month'],
-                'base_days': 30,
-                'urgency': 3
-            },
-            # Quarterly
-            'quarterly': {
-                'patterns': ['quarterly', 'end of quarter', 'q1', 'q2', 'q3', 'q4', 'quarter end'],
-                'base_days': 90,
-                'urgency': 2
-            },
-            # Longer terms
-            'long_term': {
-                'patterns': ['someday', 'eventually', 'when possible', 'low priority', 'nice to have'],
-                'base_days': 30,
-                'urgency': 1
+        # Log sanitized credentials for debugging
+        logger.info(f"TrelloAPI initialized - API Key: {self.api_key[:8]}... (len: {len(self.api_key)})")
+        logger.info(f"Token: {self.token[:8]}... (len: {len(self.token)})")
+    
+    def test_connection(self) -> Dict[str, Any]:
+        """Test API connection and return user info"""
+        try:
+            url = f"{self.base_url}/members/me"
+            
+            logger.info(f"Testing connection to: {url}")
+            logger.info(f"Auth params: key={self.api_key[:8]}..., token={self.token[:8]}...")
+            
+            response = requests.get(url, params=self.auth_params, timeout=10)
+            
+            logger.info(f"Response status: {response.status_code}")
+            logger.info(f"Response headers: {dict(response.headers)}")
+            
+            if response.status_code == 200:
+                user_data = response.json()
+                logger.info(f"Connection successful! User: {user_data.get('username', 'Unknown')}")
+                return {
+                    'success': True,
+                    'user': {
+                        'username': user_data.get('username', 'Unknown'),
+                        'fullName': user_data.get('fullName', 'Unknown'),
+                        'id': user_data.get('id', 'Unknown')
+                    }
+                }
+            elif response.status_code == 401:
+                error_detail = self._analyze_401_error(response)
+                logger.error(f"401 Unauthorized: {error_detail}")
+                return {
+                    'success': False,
+                    'error': f"Authentication failed: {error_detail}"
+                }
+            elif response.status_code == 400:
+                logger.error(f"400 Bad Request: {response.text}")
+                return {
+                    'success': False,
+                    'error': f"Bad request - check your API key format. Got: {response.text}"
+                }
+            else:
+                logger.error(f"HTTP {response.status_code}: {response.text}")
+                return {
+                    'success': False,
+                    'error': f"API Error: {response.status_code} - {response.text}"
+                }
+                
+        except requests.exceptions.Timeout:
+            logger.error("Request timeout")
+            return {
+                'success': False,
+                'error': "Connection timeout - please check your internet connection"
             }
-        }
-        
-        # Action urgency modifiers
-        self.action_urgency = {
-            'high': ['fix', 'bug', 'error', 'break', 'broken', 'down', 'crash', 'fail', 'critical', 'block', 'blocking', 'hotfix', 'security'],
-            'medium': ['review', 'update', 'check', 'test', 'verify', 'complete', 'finish', 'implement', 'deploy'],
-            'low': ['plan', 'research', 'consider', 'explore', 'document', 'organize', 'brainstorm', 'think about']
-        }
-        
-        # Context modifiers
-        self.context_modifiers = {
-            'client': ['client', 'customer', 'user', 'stakeholder'],
-            'meeting': ['meeting', 'call', 'standup', 'sync', 'demo', 'presentation'],
-            'deadline': ['deadline', 'due', 'submit', 'deliver', 'launch', 'release'],
-            'maintenance': ['maintenance', 'cleanup', 'refactor', 'optimize']
-        }
-        
-        # Weekday mapping
-        self.weekdays = {
-            'monday': 0, 'tuesday': 1, 'wednesday': 2, 'thursday': 3,
-            'friday': 4, 'saturday': 5, 'sunday': 6,
-            'mon': 0, 'tue': 1, 'wed': 2, 'thu': 3, 'fri': 4, 'sat': 5, 'sun': 6
-        }
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error: {e}")
+            return {
+                'success': False,
+                'error': f"Connection failed: {str(e)}"
+            }
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request exception: {e}")
+            return {
+                'success': False,
+                'error': f"Request failed: {str(e)}"
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            return {
+                'success': False,
+                'error': f"Unexpected error: {str(e)}"
+            }
     
-    def _days_until_friday(self) -> int:
-        """Calculate days until next Friday"""
-        days_ahead = 4 - self.today.weekday()  # Friday is weekday 4
-        if days_ahead <= 0:  # Target day already happened this week
-            days_ahead += 7
-        return days_ahead
-    
-    def _days_until_monday(self) -> int:
-        """Calculate days until next Monday"""
-        days_ahead = 0 - self.today.weekday()  # Monday is weekday 0
-        if days_ahead <= 0:  # Target day already happened this week
-            days_ahead += 7
-        return days_ahead
-    
-    def _days_until_month_end(self) -> int:
-        """Calculate days until end of current month"""
-        last_day = calendar.monthrange(self.today.year, self.today.month)[1]
-        return last_day - self.today.day
-    
-    def _extract_specific_dates(self, text: str) -> Optional[Tuple[datetime, float]]:
-        """Extract specific dates from text using advanced parsing"""
-        text_lower = text.lower()
-        
-        # Try to extract specific weekdays
-        for day_name, day_num in self.weekdays.items():
-            if day_name in text_lower:
-                days_ahead = day_num - self.today.weekday()
-                if days_ahead <= 0:
-                    days_ahead += 7
+    def _analyze_401_error(self, response) -> str:
+        """Analyze 401 error and provide helpful feedback"""
+        try:
+            error_data = response.json()
+            error_message = error_data.get('message', 'Unknown error')
+            
+            if 'invalid key' in error_message.lower():
+                return "Invalid API key. Please check your API key is exactly 32 characters."
+            elif 'invalid token' in error_message.lower():
+                return "Invalid token. Please regenerate your token from Trello."
+            elif 'unauthorized' in error_message.lower():
+                return "Unauthorized access. Check both API key and token."
+            else:
+                return f"Authentication error: {error_message}"
                 
-                # Check if it's "next" weekday
-                if 'next' in text_lower and day_name in text_lower:
-                    days_ahead += 7
-                
-                target_date = datetime.now() + timedelta(days=days_ahead)
-                return target_date, 0.8
-        
-        # Try to parse actual dates
-        date_patterns = [
-            r'\b(\d{1,2})/(\d{1,2})/(\d{2,4})\b',  # MM/DD/YYYY
-            r'\b(\d{1,2})-(\d{1,2})-(\d{2,4})\b',  # MM-DD-YYYY
-            r'\b(\d{4})-(\d{1,2})-(\d{1,2})\b',    # YYYY-MM-DD
-            r'\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b',  # MM.DD.YYYY
-        ]
-        
-        for pattern in date_patterns:
-            matches = re.findall(pattern, text)
-            if matches:
-                try:
-                    match = matches[0]
-                    if len(match[0]) == 4:  # YYYY-MM-DD format
-                        year, month, day = int(match[0]), int(match[1]), int(match[2])
-                    else:  # MM/DD/YYYY or MM-DD-YYYY
-                        month, day, year = int(match[0]), int(match[1]), int(match[2])
-                        if year < 100:
-                            year += 2000
+        except:
+            # If we can't parse the JSON, return the raw text
+            return f"Authentication failed: {response.text[:200]}"
+    
+    def get_user_boards(self) -> List[Dict[str, Any]]:
+        """Get all boards for the authenticated user"""
+        try:
+            url = f"{self.base_url}/members/me/boards"
+            params = {**self.auth_params, 'filter': 'open'}
+            
+            logger.info(f"Fetching boards from: {url}")
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch boards: {response.status_code} - {response.text}")
+                return []
+            
+            response.raise_for_status()
+            
+            boards = response.json()
+            logger.info(f"Successfully fetched {len(boards)} boards")
+            
+            return [
+                {
+                    'id': board['id'],
+                    'name': board['name'],
+                    'url': board['url'],
+                    'desc': board.get('desc', ''),
+                    'dateLastActivity': board.get('dateLastActivity', '')
+                }
+                for board in boards
+            ]
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch boards: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching boards: {str(e)}")
+            return []
+    
+    def get_board_cards(self, board_id: str) -> List[TrelloCard]:
+        """Get all cards from a specific board with checklists"""
+        try:
+            # Get board info first
+            board_info = self._get_board_info(board_id)
+            if not board_info:
+                logger.error(f"Could not get board info for {board_id}")
+                return []
+            
+            # Get all cards with checklists
+            url = f"{self.base_url}/boards/{board_id}/cards"
+            params = {
+                **self.auth_params,
+                'checklists': 'all',
+                'list': 'true'
+            }
+            
+            logger.info(f"Fetching cards from board: {board_info['name']}")
+            response = requests.get(url, params=params, timeout=20)
+            response.raise_for_status()
+            
+            cards_data = response.json()
+            cards = []
+            
+            for card_data in cards_data:
+                card = TrelloCard(
+                    id=card_data['id'],
+                    name=card_data['name'],
+                    desc=card_data.get('desc', ''),
+                    due=card_data.get('due'),
+                    board_id=board_id,
+                    board_name=board_info['name'],
+                    list_id=card_data['idList'],
+                    list_name=card_data.get('list', {}).get('name', 'Unknown List'),
+                    checklists=card_data.get('checklists', [])
+                )
+                cards.append(card)
+            
+            logger.info(f"Successfully fetched {len(cards)} cards from board {board_info['name']}")
+            return cards
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch cards: {str(e)}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error fetching cards: {str(e)}")
+            return []
+    
+    def get_checklist_items(self, board_id: str) -> List[ChecklistItem]:
+        """Extract all checklist items from a board"""
+        try:
+            cards = self.get_board_cards(board_id)
+            checklist_items = []
+            
+            for card in cards:
+                for checklist in card.checklists:
+                    checklist_name = checklist.get('name', 'Unnamed Checklist')
                     
-                    target_date = datetime(year, month, day)
-                    return target_date, 0.9
-                except ValueError:
-                    continue
-        
-        return None
+                    for item in checklist.get('checkItems', []):
+                        checklist_item = ChecklistItem(
+                            id=item['id'],
+                            name=item['name'],
+                            state=item['state'],
+                            card_id=card.id,
+                            card_name=card.name,
+                            checklist_id=checklist['id'],
+                            checklist_name=checklist_name,
+                            board_id=card.board_id,
+                            board_name=card.board_name
+                        )
+                        checklist_items.append(checklist_item)
+            
+            logger.info(f"Extracted {len(checklist_items)} checklist items from {len(cards)} cards")
+            return checklist_items
+            
+        except Exception as e:
+            logger.error(f"Failed to extract checklist items: {str(e)}")
+            return []
     
-    def analyze_text_advanced(self, text: str) -> Dict[str, Any]:
-        """Advanced text analysis with multiple factors"""
-        text_lower = text.lower().strip()
-        
-        # First try to extract specific dates
-        specific_date = self._extract_specific_dates(text)
-        if specific_date:
-            date_obj, confidence = specific_date
-            days_diff = (date_obj.date() - self.today).days
+    def _get_board_info(self, board_id: str) -> Optional[Dict[str, Any]]:
+        """Get basic board information"""
+        try:
+            url = f"{self.base_url}/boards/{board_id}"
+            response = requests.get(url, params=self.auth_params, timeout=10)
+            response.raise_for_status()
+            
+            board_data = response.json()
             return {
-                'suggested_days': max(0, days_diff),
-                'confidence': confidence,
-                'reasoning': f"Specific date detected: {date_obj.strftime('%Y-%m-%d')}",
-                'urgency_score': 8 if days_diff <= 1 else 6 if days_diff <= 7 else 4,
-                'matched_patterns': ['specific_date']
+                'id': board_data['id'],
+                'name': board_data['name'],
+                'url': board_data['url']
             }
-        
-        # Analyze time patterns
-        matched_patterns = []
-        urgency_scores = []
-        suggested_days_list = []
-        
-        for pattern_name, pattern_data in self.time_patterns.items():
-            for pattern in pattern_data['patterns']:
-                if pattern in text_lower:
-                    matched_patterns.append(pattern)
-                    urgency_scores.append(pattern_data['urgency'])
-                    suggested_days_list.append(pattern_data['base_days'])
-        
-        # Analyze action urgency
-        action_modifier = 0
-        detected_actions = []
-        for urgency_level, actions in self.action_urgency.items():
-            for action in actions:
-                if action in text_lower:
-                    detected_actions.append(action)
-                    if urgency_level == 'high':
-                        action_modifier += 3
-                    elif urgency_level == 'medium':
-                        action_modifier += 1
-                    else:
-                        action_modifier -= 1
-        
-        # Analyze context modifiers
-        context_modifier = 0
-        detected_contexts = []
-        for context_type, contexts in self.context_modifiers.items():
-            for context in contexts:
-                if context in text_lower:
-                    detected_contexts.append(context)
-                    if context_type == 'client':
-                        context_modifier += 2
-                    elif context_type == 'meeting':
-                        context_modifier += 1
-                    elif context_type == 'deadline':
-                        context_modifier += 2
-        
-        # Calculate final metrics
-        if matched_patterns:
-            # Use the most urgent pattern
-            max_urgency_idx = urgency_scores.index(max(urgency_scores))
-            suggested_days = suggested_days_list[max_urgency_idx]
-            base_urgency = urgency_scores[max_urgency_idx]
-            confidence = 0.7 + (len(matched_patterns) * 0.05)
-        else:
-            # Default fallback based on text length and complexity
-            word_count = len(text_lower.split())
-            if word_count < 3:
-                suggested_days = 7
-                base_urgency = 3
-            elif word_count < 10:
-                suggested_days = 5
-                base_urgency = 4
-            else:
-                suggested_days = 3
-                base_urgency = 5
-            confidence = 0.3
-        
-        # Apply modifiers
-        final_urgency = min(10, max(0, base_urgency + action_modifier + context_modifier))
-        
-        # Adjust days based on final urgency
-        if final_urgency >= 9:
-            suggested_days = min(suggested_days, 1)
-        elif final_urgency >= 7:
-            suggested_days = min(suggested_days, 3)
-        elif final_urgency >= 5:
-            suggested_days = min(suggested_days, 7)
-        
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to get board info: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error getting board info: {str(e)}")
+            return None
+    
+    def update_checklist_item_name(self, card_id: str, checklist_item_id: str, new_name: str) -> bool:
+        """Update checklist item name (for adding due dates to item text)"""
+        try:
+            url = f"{self.base_url}/cards/{card_id}/checkItem/{checklist_item_id}"
+            data = {
+                **self.auth_params,
+                'name': new_name
+            }
+            
+            response = requests.put(url, data=data, timeout=10)
+            response.raise_for_status()
+            
+            logger.info(f"Successfully updated checklist item {checklist_item_id}")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to update checklist item: {str(e)}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error updating checklist item: {str(e)}")
+            return False
+
+def validate_trello_credentials(api_key: str, token: str) -> Dict[str, Any]:
+    """Validate Trello API credentials with detailed feedback"""
+    
+    # Clean inputs
+    api_key = api_key.strip() if api_key else ""
+    token = token.strip() if token else ""
+    
+    logger.info(f"Validating credentials - API Key length: {len(api_key)}, Token length: {len(token)}")
+    
+    # Check for empty credentials
+    if not api_key or not token:
         return {
-            'suggested_days': max(0, suggested_days),
-            'confidence': min(0.95, confidence),
-            'urgency_score': final_urgency,
-            'matched_patterns': matched_patterns[:5],
-            'detected_actions': detected_actions[:3],
-            'detected_contexts': detected_contexts[:3],
-            'reasoning': self._generate_advanced_reasoning(text, matched_patterns, suggested_days, final_urgency, detected_actions, detected_contexts)
+            'success': False,
+            'error': 'Both API Key and Token are required'
         }
     
-    def _generate_advanced_reasoning(self, text: str, patterns: List[str], days: int, urgency: int, actions: List[str], contexts: List[str]) -> str:
-        """Generate detailed reasoning for the suggestion"""
-        reasoning_parts = []
-        
-        if patterns:
-            pattern_str = ', '.join(patterns[:3])
-            reasoning_parts.append(f"Time indicators: '{pattern_str}'")
-        
-        if actions:
-            action_str = ', '.join(actions[:3])
-            reasoning_parts.append(f"Action keywords: '{action_str}'")
-        
-        if contexts:
-            context_str = ', '.join(contexts[:3])
-            reasoning_parts.append(f"Context clues: '{context_str}'")
-        
-        if not reasoning_parts:
-            reasoning_parts.append("No specific indicators found, using default timeline")
-        
-        # Add urgency explanation
-        if urgency >= 9:
-            urgency_text = "Immediate action required"
-        elif urgency >= 7:
-            urgency_text = "High priority task"
-        elif urgency >= 5:
-            urgency_text = "Medium priority task"
-        elif urgency >= 3:
-            urgency_text = "Standard timeline task"
-        else:
-            urgency_text = "Low priority task"
-        
-        base_reasoning = "; ".join(reasoning_parts)
-        
-        if days == 0:
-            return f"{base_reasoning}. {urgency_text} - suggested for today."
-        elif days == 1:
-            return f"{base_reasoning}. {urgency_text} - suggested for tomorrow."
-        elif days <= 7:
-            return f"{base_reasoning}. {urgency_text} - suggested within {days} days."
-        else:
-            return f"{base_reasoning}. {urgency_text} - suggested {days}-day timeline."
+    # Check API key format
+    if len(api_key) != 32:
+        return {
+            'success': False,
+            'error': f'API Key should be exactly 32 characters long (got {len(api_key)})'
+        }
     
-    def suggest_due_date(self, checklist_item: str) -> Dict[str, Any]:
-        """Main method to suggest due date with advanced analysis"""
-        try:
-            if not checklist_item or not checklist_item.strip():
-                raise ValueError("Empty checklist item")
-            
-            # Advanced text analysis
-            analysis = self.analyze_text_advanced(checklist_item)
-            
-            # Calculate target date
-            suggested_date = datetime.now() + timedelta(days=analysis['suggested_days'])
-            
-            # Ensure it's not a weekend for work tasks (optional logic)
-            if analysis['urgency_score'] < 8 and suggested_date.weekday() >= 5:  # Weekend
-                # Move to next Monday if it's weekend and not urgent
-                days_to_monday = 7 - suggested_date.weekday()
-                suggested_date += timedelta(days=days_to_monday)
-                analysis['reasoning'] += " (Moved to next weekday)"
-            
-            # Ensure it's not a past date
-            if suggested_date.date() < self.today:
-                suggested_date = datetime.now() + timedelta(days=1)
-                analysis['suggested_days'] = 1
-                analysis['reasoning'] += " (Adjusted to avoid past date)"
-            
-            return {
-                'suggested_date': suggested_date.strftime('%Y-%m-%d'),
-                'suggested_datetime': suggested_date,
-                'confidence': analysis['confidence'],
-                'reasoning': analysis['reasoning'],
-                'urgency_score': analysis['urgency_score'],
-                'keywords_found': analysis['matched_patterns'],
-                'days_from_now': analysis['suggested_days'],
-                'detected_actions': analysis.get('detected_actions', []),
-                'detected_contexts': analysis.get('detected_contexts', [])
-            }
-            
-        except Exception as e:
-            logger.error(f"Error in suggest_due_date: {str(e)}")
-            # Robust fallback
-            fallback_date = datetime.now() + timedelta(days=7)
-            return {
-                'suggested_date': fallback_date.strftime('%Y-%m-%d'),
-                'suggested_datetime': fallback_date,
-                'confidence': 0.3,
-                'reasoning': f'Default 7-day suggestion due to analysis error: {str(e)[:50]}',
-                'urgency_score': 3,
-                'keywords_found': [],
-                'days_from_now': 7,
-                'detected_actions': [],
-                'detected_contexts': []
-            }
+    # Check if API key contains only valid characters (alphanumeric)
+    if not api_key.isalnum():
+        return {
+            'success': False,
+            'error': 'API Key should contain only letters and numbers'
+        }
+    
+    # Check token format
+    if len(token) != 64:
+        return {
+            'success': False,
+            'error': f'Token should be exactly 64 characters long (got {len(token)})'
+        }
+    
+    # Check if token contains only valid characters (alphanumeric)
+    if not token.isalnum():
+        return {
+            'success': False,
+            'error': 'Token should contain only letters and numbers'
+        }
+    
+    # Test actual connection
+    logger.info("Credentials format validated, testing connection...")
+    trello = TrelloAPI(api_key, token)
+    return trello.test_connection()
 
-# Backwards compatibility
-AIDateParser = AdvancedAIDateParser
+def get_fresh_trello_credentials_guide() -> str:
+    """Get updated guide for getting Trello credentials"""
+    return """
+🔑 **How to get fresh Trello API credentials:**
 
-def test_enhanced_parser():
-    """Comprehensive test suite for enhanced parser"""
-    parser = AdvancedAIDateParser()
+1. **Get API Key:**
+   - Go to: https://trello.com/app-key
+   - Copy your API Key (32 characters)
+
+2. **Generate Token:**
+   - On the same page, click "Token" link
+   - Or go directly to: https://trello.com/1/authorize?expiration=never&scope=read,write&response_type=token&name=ChecklistRello&key=YOUR_API_KEY
+   - Replace YOUR_API_KEY with your actual API key
+   - Click "Allow" to authorize
+   - Copy the generated token (64 characters)
+
+3. **Common Issues:**
+   - Make sure API key is exactly 32 characters
+   - Make sure token is exactly 64 characters
+   - Don't include spaces or extra characters
+   - Token expires - regenerate if needed
+   - Check if your Trello account has API access enabled
+
+4. **Test Connection:**
+   - Paste both credentials in the app
+   - Click "Test Connection"
+   - Should show your Trello username if successful
+"""
+
+# Test function with better debugging
+def test_trello_api_connection(api_key: str = "", token: str = ""):
+    """Test Trello API connection with detailed debugging"""
+    print("🔗 TRELLO API CONNECTION TEST")
+    print("=" * 50)
     
-    test_cases = [
-        # Immediate urgency
-        ("Fix critical security bug ASAP", 0, 10),
-        ("Emergency server maintenance NOW", 0, 10),
-        ("Urgent client call needed today", 0, 9),
-        
-        # Specific timeframes
-        ("Schedule team meeting tomorrow", 1, 8),
-        ("Review code by Friday", None, 7),
-        ("Deploy to production next week", None, 6),
-        ("Plan Q2 strategy quarterly review", 90, 2),
-        
-        # Complex cases with context
-        ("Fix login bug for client demo tomorrow", 1, 9),
-        ("Research new framework when possible", 30, 1),
-        ("Complete user documentation by month end", None, 4),
-        
-        # Date parsing
-        ("Submit report by 2025-09-25", 3, 8),
-        ("Meeting scheduled for 09/30/2025", None, 8),
-        
-        # Edge cases
-        ("", 7, 3),  # Empty string
-        ("Very long detailed task description with multiple clauses and complex requirements", 3, 5),
-        ("a", 7, 3),  # Single character
-    ]
+    if not api_key or not token:
+        print("❌ Please provide API key and token for testing")
+        print(get_fresh_trello_credentials_guide())
+        return
     
-    print("🧪 ENHANCED AI PARSER TEST SUITE")
-    print("=" * 70)
+    print(f"API Key: {api_key[:8]}...{api_key[-4:]} (length: {len(api_key)})")
+    print(f"Token: {token[:8]}...{token[-4:]} (length: {len(token)})")
+    print()
     
-    passed = 0
-    total = len(test_cases)
+    # Test validation first
+    print("1. Validating credential format...")
+    validation_result = validate_trello_credentials(api_key, token)
     
-    for i, (text, expected_days, expected_urgency) in enumerate(test_cases, 1):
-        try:
-            result = parser.suggest_due_date(text)
+    if validation_result['success']:
+        print("✅ Credential format is valid")
+        print(f"   Connected as: {validation_result['user']['fullName']}")
+        print(f"   Username: {validation_result['user']['username']}")
+        
+        # Test getting boards
+        print("\n2. Testing board access...")
+        trello = TrelloAPI(api_key, token)
+        boards = trello.get_user_boards()
+        
+        if boards:
+            print(f"✅ Successfully retrieved {len(boards)} boards:")
+            for i, board in enumerate(boards[:3], 1):
+                print(f"   {i}. {board['name']} (ID: {board['id'][:8]}...)")
             
-            print(f"\n{i}. Text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
-            print(f"   📅 Suggested: {result['suggested_date']} ({result['days_from_now']} days)")
-            print(f"   🎯 Confidence: {result['confidence']:.1%}")
-            print(f"   ⚡ Urgency: {result['urgency_score']}/10")
-            print(f"   🔍 Keywords: {result['keywords_found']}")
-            print(f"   🎬 Actions: {result.get('detected_actions', [])}")
-            print(f"   🏷️  Contexts: {result.get('detected_contexts', [])}")
-            print(f"   💭 Reasoning: {result['reasoning'][:100]}{'...' if len(result['reasoning']) > 100 else ''}")
-            
-            # Validation
-            test_passed = True
-            if expected_days is not None and result['days_from_now'] != expected_days:
-                print(f"   ⚠️  Expected {expected_days} days, got {result['days_from_now']}")
-                test_passed = False
-            
-            if expected_urgency is not None and abs(result['urgency_score'] - expected_urgency) > 2:
-                print(f"   ⚠️  Expected urgency ~{expected_urgency}, got {result['urgency_score']}")
-                test_passed = False
-            
-            if test_passed:
-                print(f"   ✅ Test passed")
-                passed += 1
-            else:
-                print(f"   ❌ Test failed")
+            if len(boards) > 3:
+                print(f"   ... and {len(boards) - 3} more boards")
                 
-            print("-" * 50)
-            
-        except Exception as e:
-            print(f"   💥 Exception: {str(e)}")
-            print("-" * 50)
-    
-    print(f"\n🎉 TEST RESULTS: {passed}/{total} tests passed ({passed/total*100:.1f}%)")
-    
-    if passed == total:
-        print("🏆 All tests passed! Parser is working correctly.")
-    elif passed >= total * 0.8:
-        print("✅ Most tests passed. Parser is functioning well.")
+            # Test getting checklist items from first board
+            if boards:
+                print(f"\n3. Testing checklist items from '{boards[0]['name']}'...")
+                items = trello.get_checklist_items(boards[0]['id'])
+                print(f"✅ Found {len(items)} checklist items")
+                
+                if items:
+                    print("   Sample items:")
+                    for item in items[:3]:
+                        status = "✅" if item.state == "complete" else "⏳"
+                        print(f"   {status} {item.name[:50]}...")
+        else:
+            print("⚠️  No boards found or error retrieving boards")
     else:
-        print("⚠️  Some tests failed. Review parser logic.")
+        print(f"❌ Validation failed: {validation_result['error']}")
+        print("\n" + get_fresh_trello_credentials_guide())
 
 if __name__ == "__main__":
-    test_enhanced_parser()
+    # Test with sample credentials (these won't work, user needs real ones)
+    test_api_key = "3a2acba63480f371331497003fc4291"  # Sample - won't work
+    test_token = "734bc8ffd72b664a9343ce882a36dde3f6cfa1148fd6773d0560463dbcb"  # Sample - won't work
+    
+    print("⚠️  This test uses sample credentials that won't work.")
+    print("Replace with your real credentials to test properly.")
+    print()
+    
+    test_trello_api_connection(test_api_key, test_token)
