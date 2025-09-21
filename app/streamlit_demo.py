@@ -2,12 +2,32 @@ import streamlit as st
 import sys
 from datetime import datetime
 import pandas as pd
+import logging
 
-# Import our modules
-from ai_parser import AdvancedAIDateParser
-from trello_integration import integrate_trello_to_main_app
-from database import DatabaseManager
-from dashboard import integrate_dashboard_to_main_app
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Import our modules with error handling
+try:
+    from ai_parser import AdvancedAIDateParser
+except ImportError:
+    logger.warning("ai_parser not available")
+    AdvancedAIDateParser = None
+
+try:
+    from trello_integration import integrate_trello_to_main_app
+except ImportError:
+    logger.warning("trello_integration not available")
+    integrate_trello_to_main_app = None
+
+try:
+    from database import DatabaseManager
+    from dashboard import integrate_dashboard_to_main_app
+except ImportError:
+    logger.warning("database/dashboard modules not available")
+    DatabaseManager = None
+    integrate_dashboard_to_main_app = None
 
 # Configure page
 st.set_page_config(
@@ -47,20 +67,31 @@ def main():
     
     # Initialize components
     if 'ai_parser' not in st.session_state:
-        st.session_state.ai_parser = AdvancedAIDateParser()
+        if AdvancedAIDateParser:
+            st.session_state.ai_parser = AdvancedAIDateParser()
+        else:
+            st.warning("⚠️ Advanced AI Parser not available. Using basic functionality.")
+            return
     
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
+    if DatabaseManager and 'db_manager' not in st.session_state:
+        try:
+            st.session_state.db_manager = DatabaseManager()
+        except Exception as e:
+            st.warning(f"⚠️ Database not available: {e}")
     
     # Sidebar for settings and stats
     with st.sidebar:
         st.header("⚙️ Settings")
         
         # Show current stats
-        stats = st.session_state.db_manager.get_analytics_summary()
-        if stats.get('total_analyses', 0) > 0:
-            st.success(f"📊 **{stats['total_analyses']}** analyses completed")
-            st.info(f"✅ **{stats.get('approval_rate', 0):.1f}%** approval rate")
+        if st.session_state.get('db_manager'):
+            try:
+                stats = st.session_state.db_manager.get_analytics_summary()
+                if stats.get('total_analyses', 0) > 0:
+                    st.success(f"📊 **{stats['total_analyses']}** analyses completed")
+                    st.info(f"✅ **{stats.get('approval_rate', 0):.1f}%** approval rate")
+            except Exception as e:
+                logger.error(f"Stats error: {e}")
         
         st.info("Currently using advanced rule-based AI parser with date extraction capabilities.")
         
@@ -71,7 +102,6 @@ def main():
         if st.button("🗑️ Clear Session History"):
             if 'history' in st.session_state:
                 st.session_state.history = []
-            st.rerun() = []
             st.rerun()
     
     # Main input area
@@ -180,40 +210,48 @@ def main():
                     # Action buttons
                     if st.button("✅ Accept & Save Suggestion"):
                         # Save to database
-                        analysis_data = {
-                            'task_text': checklist_item,
-                            'suggested_date': result['suggested_date'],
-                            'confidence': result['confidence'],
-                            'urgency_score': result['urgency_score'],
-                            'keywords_found': result['keywords_found'],
-                            'reasoning': result['reasoning']
-                        }
+                        if st.session_state.get('db_manager'):
+                            analysis_data = {
+                                'task_text': checklist_item,
+                                'suggested_date': result['suggested_date'],
+                                'confidence': result['confidence'],
+                                'urgency_score': result['urgency_score'],
+                                'keywords_found': result['keywords_found'],
+                                'reasoning': result['reasoning']
+                            }
+                            
+                            task_id = st.session_state.db_manager.save_analysis(analysis_data)
+                            st.session_state.db_manager.update_user_approval(task_id, True, result['suggested_date'])
+                            
+                            st.success(f"✅ Accepted and saved to database (ID: {task_id})")
+                        else:
+                            st.success("✅ Accepted suggestion (database not available)")
                         
-                        task_id = st.session_state.db_manager.save_analysis(analysis_data)
-                        st.session_state.db_manager.update_user_approval(task_id, True, result['suggested_date'])
-                        
-                        st.success(f"✅ Accepted and saved to database (ID: {task_id})")
                         add_to_history(checklist_item, result['suggested_date'], "Accepted & Saved")
                     
                     if st.button("📝 Accept Modified & Save"):
                         # Save to database with modified date
-                        analysis_data = {
-                            'task_text': checklist_item,
-                            'suggested_date': str(adjusted_date),
-                            'confidence': result['confidence'],
-                            'urgency_score': result['urgency_score'],
-                            'keywords_found': result['keywords_found'],
-                            'reasoning': result['reasoning'] + f" (User modified to {adjusted_date})"
-                        }
+                        if st.session_state.get('db_manager'):
+                            analysis_data = {
+                                'task_text': checklist_item,
+                                'suggested_date': str(adjusted_date),
+                                'confidence': result['confidence'],
+                                'urgency_score': result['urgency_score'],
+                                'keywords_found': result['keywords_found'],
+                                'reasoning': result['reasoning'] + f" (User modified to {adjusted_date})"
+                            }
+                            
+                            task_id = st.session_state.db_manager.save_analysis(analysis_data)
+                            st.session_state.db_manager.update_user_approval(task_id, True, str(adjusted_date))
+                            
+                            st.success(f"✅ Modified date accepted and saved (ID: {task_id})")
+                        else:
+                            st.success(f"✅ Modified date accepted: {adjusted_date}")
                         
-                        task_id = st.session_state.db_manager.save_analysis(analysis_data)
-                        st.session_state.db_manager.update_user_approval(task_id, True, str(adjusted_date))
-                        
-                        st.success(f"✅ Modified date accepted and saved (ID: {task_id})")
                         add_to_history(checklist_item, str(adjusted_date), "Modified & Saved")
                 
                 # Save analysis even if not approved (for learning)
-                if 'analysis_saved' not in st.session_state:
+                if st.session_state.get('db_manager') and 'analysis_saved' not in st.session_state:
                     analysis_data = {
                         'task_text': checklist_item,
                         'suggested_date': result['suggested_date'],
@@ -230,55 +268,90 @@ def main():
                 st.error(f"❌ Error analyzing task: {str(e)}")
                 st.write("Please try again or contact support.")
                 # Log error for debugging
-                st.session_state.db_manager.save_analysis({
-                    'task_text': checklist_item,
-                    'suggested_date': datetime.now().strftime('%Y-%m-%d'),
-                    'confidence': 0.0,
-                    'urgency_score': 0,
-                    'keywords_found': [],
-                    'reasoning': f'Analysis failed: {str(e)}'
-                })
+                if st.session_state.get('db_manager'):
+                    try:
+                        st.session_state.db_manager.save_analysis({
+                            'task_text': checklist_item,
+                            'suggested_date': datetime.now().strftime('%Y-%m-%d'),
+                            'confidence': 0.0,
+                            'urgency_score': 0,
+                            'keywords_found': [],
+                            'reasoning': f'Analysis failed: {str(e)}'
+                        })
+                    except Exception:
+                        pass  # Don't fail if database save also fails
     
     # Recent analyses from database
     st.markdown("## 📚 Recent Analysis History")
-    recent_analyses = st.session_state.db_manager.get_analyses(limit=10)
     
-    if recent_analyses:
-        # Create DataFrame for display
-        history_data = []
-        for analysis in recent_analyses:
-            history_data.append({
-                "ID": analysis.id,
-                "Task": analysis.task_text[:50] + ("..." if len(analysis.task_text) > 50 else ""),
-                "Suggested Date": analysis.suggested_date,
-                "Final Date": analysis.final_due_date or "Not set",
-                "Confidence": f"{analysis.confidence:.1%}",
-                "Urgency": f"{analysis.urgency_score}/10",
-                "Status": "✅ Approved" if analysis.user_approved else "⏳ Pending",
-                "Source": "🔗 Trello" if analysis.trello_card_id else "✏️ Manual",
-                "Created": analysis.created_at[:16] if analysis.created_at else "Unknown"
-            })
-        
-        df = pd.DataFrame(history_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # Quick stats
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            approved_count = sum(1 for a in recent_analyses if a.user_approved)
-            st.metric("Approved", f"{approved_count}/{len(recent_analyses)}")
-        with col2:
-            avg_confidence = sum(a.confidence for a in recent_analyses) / len(recent_analyses)
-            st.metric("Avg Confidence", f"{avg_confidence:.1%}")
-        with col3:
-            avg_urgency = sum(a.urgency_score for a in recent_analyses) / len(recent_analyses)
-            st.metric("Avg Urgency", f"{avg_urgency:.1f}/10")
+    if st.session_state.get('db_manager'):
+        try:
+            recent_analyses = st.session_state.db_manager.get_analyses(limit=10)
+            
+            if recent_analyses:
+                # Create DataFrame for display
+                history_data = []
+                for analysis in recent_analyses:
+                    history_data.append({
+                        "ID": analysis.id,
+                        "Task": analysis.task_text[:50] + ("..." if len(analysis.task_text) > 50 else ""),
+                        "Suggested Date": analysis.suggested_date,
+                        "Final Date": analysis.final_due_date or "Not set",
+                        "Confidence": f"{analysis.confidence:.1%}",
+                        "Urgency": f"{analysis.urgency_score}/10",
+                        "Status": "✅ Approved" if analysis.user_approved else "⏳ Pending",
+                        "Source": "🔗 Trello" if analysis.trello_card_id else "✏️ Manual",
+                        "Created": analysis.created_at[:16] if analysis.created_at else "Unknown"
+                    })
+                
+                df = pd.DataFrame(history_data)
+                st.dataframe(df, use_container_width=True)
+                
+                # Quick stats
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    approved_count = sum(1 for a in recent_analyses if a.user_approved)
+                    st.metric("Approved", f"{approved_count}/{len(recent_analyses)}")
+                with col2:
+                    avg_confidence = sum(a.confidence for a in recent_analyses) / len(recent_analyses)
+                    st.metric("Avg Confidence", f"{avg_confidence:.1%}")
+                with col3:
+                    avg_urgency = sum(a.urgency_score for a in recent_analyses) / len(recent_analyses)
+                    st.metric("Avg Urgency", f"{avg_urgency:.1f}/10")
+            else:
+                st.info("No analysis history available yet. Start analyzing tasks to build your database!")
+        except Exception as e:
+            st.error(f"Error loading history: {e}")
     else:
-        st.info("No analysis history available yet. Start analyzing tasks to build your database!")
+        # Show session history as fallback
+        if 'history' in st.session_state and st.session_state.history:
+            history_data = []
+            for item in st.session_state.history[-10:]:  # Show last 10
+                history_data.append({
+                    "Task": item['task'][:50] + ("..." if len(item['task']) > 50 else ""),
+                    "Suggested Date": item['date'],
+                    "Status": item['status'],
+                    "Timestamp": item['timestamp']
+                })
+            
+            if history_data:
+                df = pd.DataFrame(history_data)
+                st.dataframe(df, use_container_width=True)
+        else:
+            st.info("No analysis history available yet. Start analyzing tasks to see insights!")
     
     # Integration modules
-    integrate_trello_to_main_app()
-    integrate_dashboard_to_main_app(st.session_state.db_manager)
+    try:
+        if integrate_trello_to_main_app:
+            integrate_trello_to_main_app()
+    except Exception as e:
+        logger.error(f"Trello integration error: {e}")
+    
+    try:
+        if integrate_dashboard_to_main_app and st.session_state.get('db_manager'):
+            integrate_dashboard_to_main_app(st.session_state.db_manager)
+    except Exception as e:
+        logger.error(f"Dashboard integration error: {e}")
 
 def add_to_history(task, date, status, result=None):
     """Add item to session analysis history"""
@@ -296,4 +369,9 @@ def add_to_history(task, date, status, result=None):
     st.session_state.history.append(history_item)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        st.error(f"🚨 Application Error: {str(e)}")
+        st.write("The application encountered an error. Please check the logs and try again.")
+        logger.error(f"Main application error: {e}")

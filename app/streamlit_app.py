@@ -1,27 +1,39 @@
 import streamlit as st
 import sys
-import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
+import json
+import logging
+from typing import Dict, Any, List, Optional
 
-# Add current directory to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Import our modules
+# Import our modules with error handling
 try:
     from ai_parser import AdvancedAIDateParser
-    from database import DatabaseManager, TaskAnalysis
+except ImportError:
+    logger.warning("ai_parser not available, using fallback")
+    AdvancedAIDateParser = None
+
+try:
     from trello_integration import integrate_trello_to_main_app
+except ImportError:
+    logger.warning("trello_integration not available")
+    integrate_trello_to_main_app = None
+
+try:
+    from database import DatabaseManager
     from dashboard import integrate_dashboard_to_main_app
-except ImportError as e:
-    st.error(f"Import error: {e}. Please ensure all modules are in the same directory.")
-    st.stop()
+except ImportError:
+    logger.warning("database/dashboard modules not available")
+    DatabaseManager = None
+    integrate_dashboard_to_main_app = None
 
 # Configure page
 st.set_page_config(
-    page_title="AI Checklist Due Dates - Enhanced",
+    page_title="AI Checklist Due Dates",
     page_icon="📅",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -38,475 +50,568 @@ st.markdown("""
         margin-bottom: 2rem;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
     }
+    
     .suggestion-box {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         padding: 1.5rem;
         border-radius: 15px;
         color: white;
         margin: 1rem 0;
-        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        border: 1px solid rgba(255,255,255,0.1);
     }
-    .confidence-high { color: #28a745; font-weight: bold; font-size: 1.1em; }
-    .confidence-medium { color: #ffc107; font-weight: bold; font-size: 1.1em; }
-    .confidence-low { color: #dc3545; font-weight: bold; font-size: 1.1em; }
+    
     .metric-card {
-        background: #f8f9fa;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
         padding: 1rem;
         border-radius: 10px;
-        border-left: 4px solid #007bff;
+        text-align: center;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
         margin: 0.5rem 0;
     }
-    .success-message {
-        background: linear-gradient(90deg, #28a745, #20c997);
-        color: white;
-        padding: 1rem;
+    
+    .confidence-high { 
+        color: #28a745; 
+        font-weight: bold; 
+        font-size: 1.2rem;
+    }
+    .confidence-medium { 
+        color: #ffc107; 
+        font-weight: bold; 
+        font-size: 1.2rem;
+    }
+    .confidence-low { 
+        color: #dc3545; 
+        font-weight: bold; 
+        font-size: 1.2rem;
+    }
+    
+    .example-button {
+        margin: 0.25rem 0;
+        width: 100%;
+    }
+    
+    .status-approved { color: #28a745; font-weight: bold; }
+    .status-pending { color: #ffc107; font-weight: bold; }
+    .status-rejected { color: #dc3545; font-weight: bold; }
+    
+    .feature-card {
+        background: white;
+        padding: 1.5rem;
         border-radius: 10px;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.05);
+        border-left: 4px solid #1f77b4;
         margin: 1rem 0;
     }
-    .stButton > button {
-        border-radius: 20px;
-        border: none;
-        font-weight: 600;
-        transition: all 0.3s ease;
-    }
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.1);
     }
 </style>
 """, unsafe_allow_html=True)
 
-def initialize_session_state():
-    """Initialize all session state variables"""
-    if 'ai_parser' not in st.session_state:
-        st.session_state.ai_parser = AdvancedAIDateParser()
+class SimpleAIParser:
+    """Fallback AI parser if advanced version not available"""
     
-    if 'db_manager' not in st.session_state:
-        st.session_state.db_manager = DatabaseManager()
-    
-    if 'history' not in st.session_state:
-        st.session_state.history = []
-    
-    if 'analysis_count' not in st.session_state:
-        st.session_state.analysis_count = 0
+    def __init__(self):
+        self.today = datetime.now().date()
+        
+    def suggest_due_date(self, text: str) -> Dict[str, Any]:
+        """Simple rule-based date suggestion"""
+        text_lower = text.lower()
+        
+        # Simple keyword detection
+        if any(word in text_lower for word in ['asap', 'urgent', 'critical', 'emergency']):
+            days = 0
+            urgency = 10
+            confidence = 0.8
+        elif any(word in text_lower for word in ['today', 'now']):
+            days = 0
+            urgency = 9
+            confidence = 0.9
+        elif any(word in text_lower for word in ['tomorrow']):
+            days = 1
+            urgency = 8
+            confidence = 0.9
+        elif any(word in text_lower for word in ['week', 'friday']):
+            days = 7
+            urgency = 6
+            confidence = 0.7
+        else:
+            days = 7
+            urgency = 5
+            confidence = 0.3
+        
+        suggested_date = datetime.now() + timedelta(days=days)
+        
+        return {
+            'suggested_date': suggested_date.strftime('%Y-%m-%d'),
+            'suggested_datetime': suggested_date,
+            'confidence': confidence,
+            'reasoning': f'Simple analysis suggests {days} days based on keywords',
+            'urgency_score': urgency,
+            'keywords_found': [],
+            'days_from_now': days
+        }
 
-def render_header():
-    """Render the main header with statistics"""
-    st.markdown('<h1 class="main-header">🤖 AI Checklist Due Dates</h1>', unsafe_allow_html=True)
-    
-    # Quick stats in header
-    stats = st.session_state.db_manager.get_analytics_summary()
-    if stats.get('total_analyses', 0) > 0:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("📊 Total Analyses", stats.get('total_analyses', 0))
-        
-        with col2:
-            approval_rate = stats.get('approval_rate', 0)
-            st.metric("✅ Approval Rate", f"{approval_rate:.1f}%")
-        
-        with col3:
-            avg_confidence = stats.get('average_confidence', 0)
-            st.metric("🎯 Avg Confidence", f"{avg_confidence:.1%}")
-        
-        with col4:
-            recent_activity = stats.get('recent_activity', 0)
-            st.metric("📈 Recent (7d)", recent_activity)
+def main():
+    # Header with animation
+    st.markdown("""
+    <div class="main-header">
+        🤖 AI Checklist Due Dates
+        <div style="font-size: 1rem; font-weight: 400; color: #666; margin-top: 0.5rem;">
+            Intelligent task scheduling powered by AI analysis
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown("---")
-
-def render_sidebar():
-    """Render enhanced sidebar with settings and quick stats"""
+    
+    # Initialize components with error handling
+    try:
+        if 'ai_parser' not in st.session_state:
+            if AdvancedAIDateParser:
+                st.session_state.ai_parser = AdvancedAIDateParser()
+            else:
+                st.session_state.ai_parser = SimpleAIParser()
+        
+        if DatabaseManager and 'db_manager' not in st.session_state:
+            st.session_state.db_manager = DatabaseManager()
+    except Exception as e:
+        logger.error(f"Component initialization error: {e}")
+        st.error(f"⚠️ Some features may be limited: {str(e)}")
+    
+    # Sidebar for settings and stats
     with st.sidebar:
-        st.header("⚙️ Control Panel")
+        st.markdown("""
+        <div class="feature-card">
+            <h3>⚙️ Settings & Stats</h3>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Quick actions
-        st.subheader("🚀 Quick Actions")
-        if st.button("🧪 Run Parser Tests", use_container_width=True):
-            run_parser_tests()
+        # Show current stats if database available
+        if st.session_state.get('db_manager'):
+            try:
+                stats = st.session_state.db_manager.get_analytics_summary()
+                if stats.get('total_analyses', 0) > 0:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <h4>📊 Analysis Stats</h4>
+                        <p><strong>{stats['total_analyses']}</strong> tasks analyzed</p>
+                        <p><strong>{stats.get('approval_rate', 0):.1f}%</strong> approval rate</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            except Exception as e:
+                logger.error(f"Stats error: {e}")
         
-        if st.button("💾 Backup Database", use_container_width=True):
-            backup_database()
+        # System info
+        ai_type = "Advanced AI Parser" if AdvancedAIDateParser else "Simple Parser"
+        db_status = "✅ Connected" if st.session_state.get('db_manager') else "❌ Not Available"
         
-        # Settings
-        st.subheader("🔧 Settings")
+        st.markdown(f"""
+        <div class="feature-card">
+            <h4>🔧 System Status</h4>
+            <p><strong>AI Engine:</strong> {ai_type}</p>
+            <p><strong>Database:</strong> {db_status}</p>
+            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d')}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Default timeline setting
-        default_timeline = st.slider(
-            "Default Timeline (days)",
-            min_value=1,
-            max_value=30,
-            value=7,
-            help="Default timeline when no patterns are detected"
-        )
-        st.session_state.default_timeline = default_timeline
-        
-        # Weekend handling
-        skip_weekends = st.checkbox(
-            "Skip weekends for non-urgent tasks",
-            value=True,
-            help="Automatically move suggested dates to weekdays"
-        )
-        st.session_state.skip_weekends = skip_weekends
-        
-        # Display current info
-        st.subheader("📅 Current Info")
-        st.info(f"**Today:** {datetime.now().strftime('%Y-%m-%d')}")
-        st.info(f"**Session Analyses:** {st.session_state.analysis_count}")
-        
-        # Clear session data
-        st.subheader("🗑️ Cleanup")
-        if st.button("Clear Session History", use_container_width=True):
-            st.session_state.history = []
-            st.session_state.analysis_count = 0
-            st.success("Session cleared!")
+        # Clear history button
+        if st.button("🗑️ Clear Session History", help="Clear current session data"):
+            clear_session_data()
+            st.success("✅ Session cleared!")
             st.rerun()
-
-def render_main_interface():
-    """Render the main analysis interface"""
+    
+    # Main content area
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("✏️ Task Analysis")
+        st.subheader("✏️ Enter Checklist Item")
         
-        # Text input with enhanced features
+        # Text input for checklist item
         checklist_item = st.text_area(
-            label="Enter Task Description",
-            placeholder="e.g., Fix critical bug in login system ASAP\nSchedule team meeting for next week\nReview quarterly report by Friday",
+            label="Task Description",
+            placeholder="e.g., Fix critical bug in login system ASAP\nSchedule quarterly review meeting\nUpdate project documentation",
             height=120,
-            help="📝 Enter a task description. The AI will analyze urgency keywords, dates, and context to suggest appropriate due dates.",
-            key="main_input"
+            help="Enter a task description. The AI will analyze urgency keywords and context to suggest appropriate due dates."
         )
         
-        # Analysis controls
-        col1a, col1b = st.columns(2)
+        # Additional options
+        with st.expander("🎛️ Advanced Options"):
+            col_opt1, col_opt2 = st.columns(2)
+            with col_opt1:
+                priority_override = st.selectbox(
+                    "Priority Override:",
+                    options=["Auto-detect", "Low", "Medium", "High", "Critical"],
+                    help="Override AI priority detection"
+                )
+            with col_opt2:
+                date_range_preference = st.selectbox(
+                    "Preferred Timeline:",
+                    options=["AI Suggestion", "Same Day", "Next Day", "This Week", "Next Week", "Custom"],
+                    help="Set your preferred timeline preference"
+                )
         
-        with col1a:
-            analyze_button = st.button("🔮 Analyze & Suggest Due Date", type="primary", use_container_width=True)
-        
-        with col1b:
-            clear_input = st.button("🧹 Clear Input", use_container_width=True)
-            if clear_input:
-                st.session_state.main_input = ""
-                st.rerun()
+        # Analyze button
+        analyze_button = st.button("🔮 Analyze & Suggest Due Date", type="primary", use_container_width=True)
     
     with col2:
         st.subheader("📊 Quick Examples")
         
-        examples = [
-            ("🚨 Fix critical bug ASAP", "immediate"),
-            ("📞 Call client tomorrow", "specific"),
-            ("📝 Review quarterly report", "general"),
-            ("📅 Schedule team meeting", "planning"),
-            ("🔄 Update documentation", "maintenance"),
-            ("🎯 Deploy by Friday", "deadline")
-        ]
-        
-        for example_text, category in examples:
-            if st.button(example_text, key=f"ex_{category}", use_container_width=True):
-                st.session_state.main_input = example_text.split(" ", 1)[1]  # Remove emoji
-                st.rerun()
-        
-        # Add custom example
-        st.markdown("**Add Custom Example:**")
-        custom_example = st.text_input("Custom task:", placeholder="Enter your own example")
-        if custom_example and st.button("➕ Use Custom", use_container_width=True):
-            st.session_state.main_input = custom_example
-            st.rerun()
-    
-    return analyze_button, checklist_item
-
-def render_analysis_results(result, checklist_item):
-    """Render comprehensive analysis results"""
-    st.markdown("## 📅 AI Analysis Results")
-    
-    # Main suggestion box
-    st.markdown(f"""
-    <div class="suggestion-box">
-        <h3>📋 Task: {checklist_item}</h3>
-        <h2>🗓️ Suggested Due Date: {result['suggested_date']}</h2>
-        <p><strong>💭 Reasoning:</strong> {result['reasoning']}</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Detailed metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        confidence = result['confidence']
-        if confidence >= 0.7:
-            conf_class = "confidence-high"
-            conf_emoji = "🎯"
-            conf_desc = "High"
-        elif confidence >= 0.5:
-            conf_class = "confidence-medium" 
-            conf_emoji = "⚠️"
-            conf_desc = "Medium"
-        else:
-            conf_class = "confidence-low"
-            conf_emoji = "❓"
-            conf_desc = "Low"
-        
-        st.markdown(f"""
-        <div class="metric-card">
-            <p style="color: {urgency_color}; font-weight: bold; font-size: 1.1em;">
-                ⚡ Urgency Score<br>
-                {result['urgency_score']}/10
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div class="metric-card">
-            <p style="color: #007bff; font-weight: bold;">
-                📅 Timeline<br>
-                {result['days_from_now']} days
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        keywords_count = len(result['keywords_found'])
-        st.markdown(f"""
-        <div class="metric-card">
-            <p style="color: #6c757d; font-weight: bold;">
-                🔍 Keywords<br>
-                {keywords_count} found
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Detailed breakdown
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🔍 Analysis Breakdown")
-        
-        if result['keywords_found']:
-            st.write("**Time Indicators:**")
-            for keyword in result['keywords_found']:
-                st.code(f"🕒 {keyword}", language=None)
-        
-        if result.get('detected_actions'):
-            st.write("**Action Keywords:**")
-            for action in result['detected_actions']:
-                st.code(f"🎬 {action}", language=None)
-        
-        if result.get('detected_contexts'):
-            st.write("**Context Clues:**")
-            for context in result['detected_contexts']:
-                st.code(f"🏷️ {context}", language=None)
-        
-        if not any([result['keywords_found'], result.get('detected_actions'), result.get('detected_contexts')]):
-            st.info("No specific patterns detected - using default analysis")
-    
-    with col2:
-        st.subheader("✏️ Adjust & Save")
-        
-        # Date adjustment
-        adjusted_date = st.date_input(
-            "Modify due date if needed:",
-            value=result['suggested_datetime'].date(),
-            help="🗓️ Adjust the suggested date based on your requirements"
-        )
-        
-        # Priority adjustment
-        adjusted_priority = st.selectbox(
-            "Adjust priority:",
-            options=["Keep AI suggestion", "Low Priority", "Medium Priority", "High Priority", "Critical"],
-            index=0
-        )
-        
-        # Action buttons
-        col2a, col2b = st.columns(2)
-        
-        with col2a:
-            if st.button("✅ Accept & Save", type="primary", use_container_width=True):
-                save_analysis(checklist_item, result, "accepted", str(result['suggested_datetime'].date()))
-        
-        with col2b:
-            if st.button("📝 Save Modified", use_container_width=True):
-                save_analysis(checklist_item, result, "modified", str(adjusted_date))
-
-def save_analysis(task_text, ai_result, status, final_date):
-    """Save analysis to database with proper error handling"""
-    try:
-        # Prepare analysis data
-        analysis_data = {
-            'task_text': task_text,
-            'suggested_date': ai_result['suggested_date'],
-            'confidence': ai_result['confidence'],
-            'urgency_score': ai_result['urgency_score'],
-            'keywords_found': ai_result['keywords_found'],
-            'reasoning': ai_result['reasoning']
+        example_categories = {
+            "🔴 High Priority": [
+                "Fix critical bug ASAP",
+                "Emergency server maintenance",
+                "Call client immediately"
+            ],
+            "🟡 Medium Priority": [
+                "Review quarterly report",
+                "Update documentation",
+                "Schedule team meeting"
+            ],
+            "🟢 Low Priority": [
+                "Research new tools",
+                "Organize project files",
+                "Plan next quarter"
+            ]
         }
         
-        # Save to database
-        task_id = st.session_state.db_manager.save_analysis(analysis_data)
+        for category, examples in example_categories.items():
+            st.markdown(f"**{category}**")
+            for example in examples:
+                if st.button(f"📝 {example}", key=f"ex_{example}", help=f"Use example: {example}"):
+                    st.session_state.current_item = example
+                    st.rerun()
+            st.markdown("")
+    
+    # Use example if selected
+    if 'current_item' in st.session_state:
+        checklist_item = st.session_state.current_item
+        st.session_state.pop('current_item', None)
+    
+    # Analysis results
+    if analyze_button and checklist_item:
+        perform_task_analysis(checklist_item, priority_override, date_range_preference)
+    
+    # Display recent analyses
+    display_recent_analyses()
+    
+    # Integration modules (if available)
+    try:
+        if integrate_trello_to_main_app:
+            integrate_trello_to_main_app()
         
-        # Update approval status
-        user_approved = status in ["accepted", "modified"]
-        st.session_state.db_manager.update_user_approval(task_id, user_approved, final_date)
-        
-        # Update session stats
-        st.session_state.analysis_count += 1
-        add_to_session_history(task_text, final_date, status.title())
-        
-        # Show success message
-        st.markdown(f"""
-        <div class="success-message">
-            <h4>✅ Analysis Saved Successfully!</h4>
-            <p>Task ID: {task_id} | Status: {status.title()} | Final Date: {final_date}</p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Trigger rerun to update stats
-        st.rerun()
-        
+        if integrate_dashboard_to_main_app and st.session_state.get('db_manager'):
+            integrate_dashboard_to_main_app(st.session_state.db_manager)
     except Exception as e:
-        st.error(f"❌ Error saving analysis: {str(e)}")
-        st.error("Please try again or contact support")
+        logger.error(f"Integration error: {e}")
 
-def render_recent_history():
-    """Render recent analysis history with enhanced features"""
-    st.markdown("## 📚 Recent Analysis History")
+def perform_task_analysis(checklist_item: str, priority_override: str, date_range_preference: str):
+    """Perform AI analysis on the task"""
+    with st.spinner("🤔 Analyzing task urgency and context..."):
+        try:
+            # Get AI suggestion
+            result = st.session_state.ai_parser.suggest_due_date(checklist_item)
+            
+            # Apply overrides
+            result = apply_user_preferences(result, priority_override, date_range_preference)
+            
+            # Display results
+            st.markdown("## 📅 AI Analysis Results")
+            
+            # Main suggestion box
+            st.markdown(f"""
+            <div class="suggestion-box">
+                <h3>📋 Task: {checklist_item}</h3>
+                <h2>🗓️ Suggested Due Date: {result['suggested_date']}</h2>
+                <p><strong>💭 AI Reasoning:</strong> {result['reasoning']}</p>
+                <p><strong>⏱️ Timeline:</strong> {result['days_from_now']} days from now</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Metrics row
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                confidence = result['confidence']
+                conf_class, conf_emoji = get_confidence_display(confidence)
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="{conf_class}">
+                        {conf_emoji}<br>
+                        {confidence:.1%}
+                    </div>
+                    <small>Confidence</small>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col2:
+                urgency = result['urgency_score']
+                urgency_color = get_urgency_color(urgency)
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="color: {urgency_color}; font-weight: bold; font-size: 1.5rem;">
+                        {urgency}/10
+                    </div>
+                    <small>Urgency Score</small>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-weight: bold; font-size: 1.2rem; color: #1f77b4;">
+                        {result['days_from_now']}
+                    </div>
+                    <small>Days Away</small>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col4:
+                keyword_count = len(result.get('keywords_found', []))
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div style="font-weight: bold; font-size: 1.2rem; color: #28a745;">
+                        {keyword_count}
+                    </div>
+                    <small>Keywords Found</small>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Keywords section
+            if result.get('keywords_found'):
+                st.subheader("🔍 Detected Keywords")
+                cols = st.columns(min(len(result['keywords_found']), 5))
+                for i, keyword in enumerate(result['keywords_found'][:5]):
+                    with cols[i % len(cols)]:
+                        st.code(keyword)
+            
+            # User feedback section
+            st.markdown("## ✏️ Review & Adjust")
+            
+            feedback_col1, feedback_col2 = st.columns(2)
+            
+            with feedback_col1:
+                # Date picker for adjustment
+                adjusted_date = st.date_input(
+                    "📅 Adjust due date if needed:",
+                    value=result['suggested_datetime'].date(),
+                    help="Modify the suggested date based on your specific needs"
+                )
+                
+                # Feedback rating
+                user_rating = st.slider(
+                    "⭐ Rate this AI suggestion (1-5 stars):",
+                    min_value=1, max_value=5, value=3,
+                    help="Help improve AI accuracy with your feedback"
+                )
+            
+            with feedback_col2:
+                st.markdown("**📝 Actions:**")
+                
+                # Action buttons
+                if st.button("✅ Accept AI Suggestion", type="primary", use_container_width=True):
+                    handle_user_decision(checklist_item, result['suggested_date'], "accepted", result, user_rating)
+                
+                if st.button("📝 Accept Modified Date", type="secondary", use_container_width=True):
+                    handle_user_decision(checklist_item, str(adjusted_date), "modified", result, user_rating)
+                
+                if st.button("❌ Reject Suggestion", use_container_width=True):
+                    handle_user_decision(checklist_item, None, "rejected", result, user_rating)
+            
+            # Save analysis for learning (if database available)
+            save_analysis_to_database(checklist_item, result)
+            
+        except Exception as e:
+            st.error(f"❌ Error analyzing task: {str(e)}")
+            logger.error(f"Analysis error: {e}")
+            
+            # Show fallback suggestion
+            fallback_date = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+            st.warning(f"🔄 Fallback suggestion: {fallback_date} (7 days from now)")
+
+def apply_user_preferences(result: Dict[str, Any], priority_override: str, date_range_preference: str) -> Dict[str, Any]:
+    """Apply user preferences to AI result"""
+    modified_result = result.copy()
     
-    # Get recent analyses from database
-    recent_analyses = st.session_state.db_manager.get_analyses(limit=15)
+    # Apply priority override
+    if priority_override != "Auto-detect":
+        priority_map = {"Low": 2, "Medium": 5, "High": 8, "Critical": 10}
+        if priority_override in priority_map:
+            modified_result['urgency_score'] = priority_map[priority_override]
+            modified_result['reasoning'] += f" (Priority manually set to {priority_override})"
     
-    if not recent_analyses:
-        st.info("📈 No analysis history available yet. Start analyzing tasks to build your database!")
-        return
+    # Apply date range preference
+    if date_range_preference != "AI Suggestion":
+        range_map = {
+            "Same Day": 0,
+            "Next Day": 1, 
+            "This Week": 7,
+            "Next Week": 14
+        }
+        if date_range_preference in range_map:
+            new_days = range_map[date_range_preference]
+            new_date = datetime.now() + timedelta(days=new_days)
+            modified_result['suggested_date'] = new_date.strftime('%Y-%m-%d')
+            modified_result['suggested_datetime'] = new_date
+            modified_result['days_from_now'] = new_days
+            modified_result['reasoning'] += f" (Timeline preference: {date_range_preference})"
     
-    # Filter controls
-    col1, col2, col3 = st.columns(3)
+    return modified_result
+
+def get_confidence_display(confidence: float) -> tuple:
+    """Get confidence display class and emoji"""
+    if confidence >= 0.7:
+        return "confidence-high", "🎯"
+    elif confidence >= 0.5:
+        return "confidence-medium", "⚠️"
+    else:
+        return "confidence-low", "❓"
+
+def get_urgency_color(urgency: int) -> str:
+    """Get color for urgency score"""
+    if urgency >= 8:
+        return "#dc3545"  # Red
+    elif urgency >= 6:
+        return "#fd7e14"  # Orange
+    elif urgency >= 4:
+        return "#ffc107"  # Yellow
+    else:
+        return "#28a745"  # Green
+
+def handle_user_decision(task: str, date: Optional[str], decision: str, result: Dict[str, Any], rating: int):
+    """Handle user decision on AI suggestion"""
+    decision_messages = {
+        "accepted": f"✅ AI suggestion accepted! Due date: {date}",
+        "modified": f"📝 Modified suggestion accepted! Due date: {date}",
+        "rejected": "❌ Suggestion rejected. No due date set."
+    }
     
-    with col1:
-        filter_status = st.selectbox(
-            "Filter by status:",
-            options=["All", "Approved", "Pending"],
-            index=0
-        )
+    st.success(decision_messages[decision])
     
-    with col2:
-        filter_urgency = st.selectbox(
-            "Min urgency level:",
-            options=["All", "Critical (8+)", "High (6+)", "Medium (4+)", "Low (0+)"],
-            index=0
-        )
+    # Add to history
+    add_to_history(task, date or "Not set", decision.title(), result, rating)
     
-    with col3:
-        sort_by = st.selectbox(
-            "Sort by:",
-            options=["Created Date (Newest)", "Created Date (Oldest)", "Urgency (High-Low)", "Confidence (High-Low)"],
-            index=0
-        )
+    # Update database if available
+    if st.session_state.get('db_manager') and decision in ["accepted", "modified"]:
+        try:
+            analysis_data = {
+                'task_text': task,
+                'suggested_date': date or result['suggested_date'],
+                'confidence': result['confidence'],
+                'urgency_score': result['urgency_score'],
+                'keywords_found': result.get('keywords_found', []),
+                'reasoning': result['reasoning'] + f" (User {decision}, Rating: {rating}/5)"
+            }
+            
+            task_id = st.session_state.db_manager.save_analysis(analysis_data)
+            st.session_state.db_manager.update_user_approval(task_id, True, date)
+            st.info(f"💾 Saved to database (ID: {task_id})")
+            
+        except Exception as e:
+            logger.error(f"Database save error: {e}")
+
+def save_analysis_to_database(task: str, result: Dict[str, Any]):
+    """Save analysis to database for learning"""
+    if st.session_state.get('db_manager') and 'analysis_saved' not in st.session_state:
+        try:
+            analysis_data = {
+                'task_text': task,
+                'suggested_date': result['suggested_date'],
+                'confidence': result['confidence'],
+                'urgency_score': result['urgency_score'],
+                'keywords_found': result.get('keywords_found', []),
+                'reasoning': result['reasoning']
+            }
+            st.session_state.db_manager.save_analysis(analysis_data)
+            st.session_state.analysis_saved = True
+        except Exception as e:
+            logger.error(f"Database save error: {e}")
+
+def display_recent_analyses():
+    """Display recent analyses from database or session"""
+    st.markdown("## 📚 Analysis History")
     
-    # Apply filters
-    filtered_analyses = recent_analyses.copy()
-    
-    if filter_status == "Approved":
-        filtered_analyses = [a for a in filtered_analyses if a.user_approved]
-    elif filter_status == "Pending":
-        filtered_analyses = [a for a in filtered_analyses if not a.user_approved]
-    
-    if filter_urgency != "All":
-        urgency_map = {"Critical (8+)": 8, "High (6+)": 6, "Medium (4+)": 4, "Low (0+)": 0}
-        min_urgency = urgency_map[filter_urgency]
-        filtered_analyses = [a for a in filtered_analyses if a.urgency_score >= min_urgency]
-    
-    # Apply sorting
-    if sort_by == "Created Date (Oldest)":
-        filtered_analyses.reverse()
-    elif sort_by == "Urgency (High-Low)":
-        filtered_analyses.sort(key=lambda x: x.urgency_score, reverse=True)
-    elif sort_by == "Confidence (High-Low)":
-        filtered_analyses.sort(key=lambda x: x.confidence, reverse=True)
-    
-    # Display results
-    if filtered_analyses:
-        # Create enhanced DataFrame
+    if st.session_state.get('db_manager'):
+        display_database_history()
+    else:
+        display_session_history()
+
+def display_database_history():
+    """Display recent analyses from database"""
+    try:
+        recent_analyses = st.session_state.db_manager.get_analyses(limit=10)
+        
+        if recent_analyses:
+            # Create DataFrame for display
+            history_data = []
+            for analysis in recent_analyses:
+                history_data.append({
+                    "ID": analysis.id,
+                    "Task": truncate_text(analysis.task_text, 50),
+                    "Suggested Date": analysis.suggested_date,
+                    "Final Date": analysis.final_due_date or "Not set",
+                    "Confidence": f"{analysis.confidence:.1%}",
+                    "Urgency": f"{analysis.urgency_score}/10",
+                    "Status": format_status(analysis.user_approved),
+                    "Source": "🔗 Trello" if analysis.trello_card_id else "✏️ Manual",
+                    "Created": analysis.created_at[:16] if analysis.created_at else "Unknown"
+                })
+            
+            df = pd.DataFrame(history_data)
+            st.dataframe(df, use_container_width=True, height=300)
+            
+            # Quick stats
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                approved_count = sum(1 for a in recent_analyses if a.user_approved)
+                st.metric("✅ Approved", f"{approved_count}/{len(recent_analyses)}")
+            with col2:
+                avg_confidence = sum(a.confidence for a in recent_analyses) / len(recent_analyses)
+                st.metric("🎯 Avg Confidence", f"{avg_confidence:.1%}")
+            with col3:
+                avg_urgency = sum(a.urgency_score for a in recent_analyses) / len(recent_analyses)
+                st.metric("⚡ Avg Urgency", f"{avg_urgency:.1f}/10")
+        else:
+            st.info("📈 No analysis history yet. Start analyzing tasks to build your database!")
+            
+    except Exception as e:
+        logger.error(f"Database history error: {e}")
+        display_session_history()
+
+def display_session_history():
+    """Display session history as fallback"""
+    if 'history' in st.session_state and st.session_state.history:
+        # Create DataFrame from session history
         history_data = []
-        for analysis in filtered_analyses:
-            # Status emoji
-            if analysis.user_approved:
-                status_emoji = "✅"
-                status_text = "Approved"
-            else:
-                status_emoji = "⏳"
-                status_text = "Pending"
-            
-            # Urgency emoji
-            if analysis.urgency_score >= 8:
-                urgency_emoji = "🔴"
-            elif analysis.urgency_score >= 6:
-                urgency_emoji = "🟡"
-            else:
-                urgency_emoji = "🟢"
-            
-            # Source emoji
-            source_emoji = "🔗" if analysis.trello_card_id else "✏️"
-            
+        for item in st.session_state.history[-10:]:  # Show last 10
             history_data.append({
-                "ID": analysis.id,
-                "Task": analysis.task_text[:60] + ("..." if len(analysis.task_text) > 60 else ""),
-                "Suggested": analysis.suggested_date,
-                "Final Date": analysis.final_due_date or "Not set",
-                "Confidence": f"{analysis.confidence:.0%}",
-                "Urgency": f"{urgency_emoji} {analysis.urgency_score}/10",
-                "Status": f"{status_emoji} {status_text}",
-                "Source": f"{source_emoji} {'Trello' if analysis.trello_card_id else 'Manual'}",
-                "Created": analysis.created_at[:16] if analysis.created_at else "Unknown"
+                "Task": truncate_text(item['task'], 50),
+                "Date": item['date'],
+                "Status": item['status'],
+                "Rating": f"{item.get('rating', 'N/A')}/5",
+                "Time": item['timestamp']
             })
         
-        # Display table
-        df = pd.DataFrame(history_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # Summary stats
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            approved_count = sum(1 for a in filtered_analyses if a.user_approved)
-            st.metric("✅ Approved", f"{approved_count}/{len(filtered_analyses)}")
-        
-        with col2:
-            avg_confidence = sum(a.confidence for a in filtered_analyses) / len(filtered_analyses)
-            st.metric("🎯 Avg Confidence", f"{avg_confidence:.1%}")
-        
-        with col3:
-            avg_urgency = sum(a.urgency_score for a in filtered_analyses) / len(filtered_analyses)
-            st.metric("⚡ Avg Urgency", f"{avg_urgency:.1f}/10")
-        
-        with col4:
-            trello_count = sum(1 for a in filtered_analyses if a.trello_card_id)
-            st.metric("🔗 From Trello", f"{trello_count}/{len(filtered_analyses)}")
-        
-        # Export options
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            csv_data = df.to_csv(index=False)
-            st.download_button(
-                label="📊 Download CSV Report",
-                data=csv_data,
-                file_name=f"ai_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-        
-        with col2:
-            if st.button("📈 View Detailed Analytics", use_container_width=True):
-                st.session_state.show_dashboard = True
-                st.rerun()
-    
+        if history_data:
+            df = pd.DataFrame(history_data)
+            st.dataframe(df, use_container_width=True)
     else:
-        st.warning("⚠️ No analyses match the current filters")
+        st.info("📋 No session history available. Analyze some tasks to see them here!")
 
-def add_to_session_history(task, date, status):
-    """Add item to session history"""
+def truncate_text(text: str, max_length: int) -> str:
+    """Truncate text to specified length"""
+    return text[:max_length] + ("..." if len(text) > max_length else "")
+
+def format_status(approved: bool) -> str:
+    """Format approval status with styling"""
+    return "✅ Approved" if approved else "⏳ Pending"
+
+def add_to_history(task: str, date: str, status: str, result: Optional[Dict] = None, rating: Optional[int] = None):
+    """Add item to session analysis history"""
     if 'history' not in st.session_state:
         st.session_state.history = []
     
@@ -514,122 +619,34 @@ def add_to_session_history(task, date, status):
         'task': task,
         'date': date,
         'status': status,
-        'timestamp': datetime.now().strftime('%H:%M:%S')
+        'timestamp': datetime.now().strftime('%H:%M:%S'),
+        'result': result,
+        'rating': rating
     }
     
     st.session_state.history.append(history_item)
 
-def run_parser_tests():
-    """Run parser tests and display results"""
-    st.info("🧪 Running parser tests...")
-    
-    # This would run the test function from ai_parser.py
-    try:
-        # Import and run tests
-        from ai_parser import test_enhanced_parser
-        
-        # Capture test output (in a real app, you'd redirect stdout)
-        st.success("✅ Parser tests completed! Check console for detailed results.")
-        st.info("💡 Tests verify the AI parser's accuracy on various task types and patterns.")
-        
-    except Exception as e:
-        st.error(f"❌ Test execution failed: {str(e)}")
-
-def backup_database():
-    """Create database backup"""
-    try:
-        backup_name = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
-        success = st.session_state.db_manager.backup_database(backup_name)
-        
-        if success:
-            st.success(f"✅ Database backed up successfully!")
-            st.info(f"📁 Backup saved as: {backup_name}")
-        else:
-            st.error("❌ Backup failed")
-            
-    except Exception as e:
-        st.error(f"❌ Backup error: {str(e)}")
-
-def main():
-    """Main application function"""
-    # Initialize session state
-    initialize_session_state()
-    
-    # Render UI components
-    render_header()
-    render_sidebar()
-    
-    # Main interface
-    analyze_button, checklist_item = render_main_interface()
-    
-    # Handle analysis
-    if analyze_button and checklist_item.strip():
-        with st.spinner("🤔 Analyzing task with enhanced AI..."):
-            try:
-                # Get AI suggestion
-                result = st.session_state.ai_parser.suggest_due_date(checklist_item)
-                
-                # Display results
-                render_analysis_results(result, checklist_item)
-                
-                # Auto-save analysis for tracking (without approval)
-                if 'current_analysis' not in st.session_state:
-                    analysis_data = {
-                        'task_text': checklist_item,
-                        'suggested_date': result['suggested_date'],
-                        'confidence': result['confidence'],
-                        'urgency_score': result['urgency_score'],
-                        'keywords_found': result['keywords_found'],
-                        'reasoning': result['reasoning']
-                    }
-                    task_id = st.session_state.db_manager.save_analysis(analysis_data)
-                    st.session_state.current_analysis = task_id
-                
-            except Exception as e:
-                st.error(f"❌ Analysis failed: {str(e)}")
-                st.error("Please try again or check your input")
-                
-                # Log error analysis
-                error_analysis = {
-                    'task_text': checklist_item,
-                    'suggested_date': datetime.now().strftime('%Y-%m-%d'),
-                    'confidence': 0.0,
-                    'urgency_score': 0,
-                    'keywords_found': [],
-                    'reasoning': f'Analysis error: {str(e)}'
-                }
-                st.session_state.db_manager.save_analysis(error_analysis)
-    
-    elif analyze_button and not checklist_item.strip():
-        st.warning("⚠️ Please enter a task description to analyze")
-    
-    # Show recent history
-    st.markdown("---")
-    render_recent_history()
-    
-    # Integration modules
-    integrate_trello_to_main_app()
-    integrate_dashboard_to_main_app(st.session_state.db_manager)
-    
-    # Footer
-    st.markdown("---")
-    st.markdown("""
-    <div style="text-align: center; color: #666; padding: 20px;">
-        <p>🤖 <strong>AI Checklist Due Dates</strong> - Enhanced Edition</p>
-        <p>Powered by Advanced Rule-Based AI Parser | Built with Streamlit</p>
-    </div>
-    """, unsafe_allow_html=True)
+def clear_session_data():
+    """Clear session data"""
+    keys_to_clear = ['history', 'analysis_saved', 'current_item']
+    for key in keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
 
 if __name__ == "__main__":
-    main()metric-card">
-            <p class="{conf_class}">
-                {conf_emoji} Confidence<br>
-                {confidence:.1%} ({conf_desc})
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        urgency_color = "#dc3545" if result['urgency_score'] >= 8 else "#ffc107" if result['urgency_score'] >= 5 else "#28a745"
-        st.markdown(f"""
-        <div class="
+    try:
+        main()
+    except Exception as e:
+        st.error(f"🚨 Application Error: {str(e)}")
+        logger.error(f"Main application error: {e}")
+        
+        # Show basic fallback interface
+        st.markdown("## 🔧 Basic Mode")
+        st.info("Running in basic mode due to system error. Some features may be limited.")
+        
+        task = st.text_input("Enter a task:")
+        if task and st.button("Simple Analysis"):
+            parser = SimpleAIParser()
+            result = parser.suggest_due_date(task)
+            st.success(f"📅 Suggested date: {result['suggested_date']}")
+            st.info(f"💭 Reasoning: {result['reasoning']}")

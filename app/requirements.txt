@@ -1,4 +1,9 @@
-python-dateutil
 streamlit
-requests
 pandas
+requests
+python-dateutil
+plotly
+spacy
+
+# black
+# flake8
