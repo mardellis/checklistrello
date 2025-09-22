@@ -1,0 +1,20 @@
+{
+  "test_timestamp": "2025-09-21T23:52:52.499739",
+  "overall_success_rate": 0.0,
+  "tests_passed": 0,
+  "total_tests": 5,
+  "detailed_results": {
+    "date_calculations": false,
+    "trello_integration": false,
+    "ai_enhancements": false,
+    "error_handling": false,
+    "streamlit_compatibility": false
+  },
+  "recommendation": "MAJOR REFACTORING NEEDED",
+  "critical_fixes_verified": {
+    "next_week_calculation": false,
+    "trello_analysis_integration": false,
+    "ai_improvements": false,
+    "error_resilience": false
+  }
+}
