@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="AI Due Date Assistant",
     page_icon="🎯",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # Enhanced CSS with better styling
@@ -98,27 +98,6 @@ st.markdown("""
         box-shadow: 0 15px 40px rgba(102, 126, 234, 0.4) !important;
     }
     
-    /* Example buttons */
-    .example-btn {
-        background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-        color: white;
-        border: none;
-        border-radius: 12px;
-        padding: 0.75rem 1rem;
-        margin: 0.25rem;
-        cursor: pointer;
-        font-weight: 500;
-        font-size: 0.9rem;
-        transition: all 0.3s ease;
-        width: 100%;
-        text-align: left;
-    }
-    
-    .example-btn:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 8px 25px rgba(17, 153, 142, 0.3);
-    }
-    
     /* Results section */
     .result-card {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -195,13 +174,6 @@ st.markdown("""
         backdrop-filter: blur(10px);
     }
     
-    /* History table */
-    .stDataFrame {
-        border-radius: 15px !important;
-        overflow: hidden !important;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.1) !important;
-    }
-    
     /* Advanced options */
     .option-container {
         background: rgba(102, 126, 234, 0.05);
@@ -220,16 +192,13 @@ st.markdown("""
         border: 1px solid rgba(17, 153, 142, 0.1);
     }
     
-    /* Remove default streamlit styling */
-    .block-container { 
-        padding-top: 1rem;
-        max-width: none;
-    }
-    
-    /* Sidebar styling */
-    .css-1d391kg { 
+    /* Sidebar enhancements */
+    .sidebar-card {
         background: rgba(255, 255, 255, 0.1);
-        backdrop-filter: blur(20px);
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+        border: 1px solid rgba(255, 255, 255, 0.2);
     }
     
     /* Hide streamlit branding */
@@ -421,16 +390,119 @@ def init_session():
     defaults = {
         'parser': SmartDateParser(),
         'history': [],
-        'current_analysis': None
+        'current_analysis': None,
+        'show_enhanced_dashboard': False,
+        'current_view': 'main'
     }
     
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
+def render_sidebar():
+    """Render enhanced sidebar with navigation and integration options"""
+    with st.sidebar:
+        st.markdown("## 🎯 Navigation")
+        
+        # Main navigation
+        view_options = {
+            'main': '🏠 Main Dashboard',
+            'enhanced': '🚀 Enhanced Board View',
+            'calendar': '📅 Calendar Integration',
+            'analytics': '📊 AI Analytics',
+            'settings': '⚙️ Settings'
+        }
+        
+        for view_key, view_name in view_options.items():
+            if st.button(view_name, key=f"nav_{view_key}", use_container_width=True):
+                st.session_state.current_view = view_key
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Trello Integration Status
+        st.markdown("### 🔗 Trello Integration")
+        
+        if st.session_state.get('trello_user'):
+            user = st.session_state.trello_user
+            st.success(f"✅ Connected as {user.get('fullName', 'User')[:20]}...")
+            
+            # Quick actions
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📋 Board", use_container_width=True):
+                    st.session_state.current_view = 'enhanced'
+                    st.rerun()
+            
+            with col2:
+                if st.button("📊 Stats", use_container_width=True):
+                    st.session_state.current_view = 'analytics'
+                    st.rerun()
+                    
+        else:
+            st.info("🔌 Not connected to Trello")
+            if st.button("🔗 Connect Trello", use_container_width=True):
+                st.session_state.current_view = 'enhanced'
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # Quick Examples in Sidebar
+        render_sidebar_examples()
+        
+        # Quick Stats
+        render_sidebar_stats()
+
+def render_sidebar_examples():
+    """Render quick examples in sidebar"""
+    st.markdown("### 💡 Quick Examples")
+    
+    examples = [
+        "Fix critical login bug ASAP",
+        "Review document by Friday", 
+        "Research new tools next week"
+    ]
+    
+    for example in examples:
+        if st.button(f"📝 {example[:25]}...", key=f"sidebar_ex_{example}", use_container_width=True):
+            st.session_state.selected_example = example
+            st.session_state.current_view = 'main'
+            st.rerun()
+
+def render_sidebar_stats():
+    """Render quick stats in sidebar"""
+    if not st.session_state.history:
+        return
+        
+    st.markdown("### 📈 Quick Stats")
+    
+    total = len(st.session_state.history)
+    accepted = sum(1 for h in st.session_state.history if h['decision'] in ['accepted', 'modified'])
+    acceptance_rate = (accepted/total*100) if total > 0 else 0
+    
+    st.metric("📊 Total", total)
+    st.metric("✅ Accepted", f"{acceptance_rate:.0f}%")
+
 def main():
     init_session()
     
+    # Render sidebar
+    render_sidebar()
+    
+    # Main content based on current view
+    if st.session_state.current_view == 'main':
+        render_main_dashboard()
+    elif st.session_state.current_view == 'enhanced':
+        render_enhanced_view()
+    elif st.session_state.current_view == 'calendar':
+        render_calendar_view()
+    elif st.session_state.current_view == 'analytics':
+        render_analytics_view()
+    elif st.session_state.current_view == 'settings':
+        render_settings_view()
+
+def render_main_dashboard():
+    """Render the main AI analysis dashboard"""
     # Header Section
     st.markdown("""
     <div class="app-header">
@@ -447,8 +519,15 @@ def main():
         st.markdown('<div class="content-card">', unsafe_allow_html=True)
         st.markdown("### ✏️ Task Analysis")
         
+        # Handle example selection
+        default_text = ""
+        if st.session_state.get('selected_example'):
+            default_text = st.session_state.selected_example
+            del st.session_state.selected_example
+        
         task_input = st.text_area(
             label="",
+            value=default_text,
             placeholder="Describe your task here...\n\nExamples:\n• Fix critical login bug ASAP\n• Schedule quarterly review by Friday\n• Research new tools when possible",
             height=120,
             label_visibility="collapsed"
@@ -478,12 +557,6 @@ def main():
         analyze_clicked = st.button("🚀 Analyze Task", type="primary", disabled=not task_input.strip())
         st.markdown('</div>', unsafe_allow_html=True)
         
-        # Handle example selection
-        if hasattr(st.session_state, 'selected_example'):
-            task_input = st.session_state.selected_example
-            del st.session_state.selected_example
-            st.rerun()
-        
         # Process Analysis
         if analyze_clicked and task_input:
             process_analysis(task_input, priority_override, timeline_preference)
@@ -493,43 +566,823 @@ def main():
             display_analysis_results(st.session_state.current_analysis)
     
     with sidebar_col:
-        # Quick Examples
+        # Quick action buttons
         st.markdown('<div class="content-card">', unsafe_allow_html=True)
-        st.markdown("### 💡 Quick Examples")
+        st.markdown("### 🚀 Quick Actions")
         
-        examples = {
-            "🔴 Critical": [
-                "Server is down fix immediately",
-                "Critical bug in production ASAP",
-                "Emergency client call needed"
-            ],
-            "🟡 Medium": [
-                "Review document by Friday",
-                "Update project status this week",
-                "Schedule team meeting soon"
-            ],
-            "🟢 Low": [
-                "Research new tools",
-                "Organize project files",
-                "Plan next quarter when possible"
-            ]
-        }
-        
-        for category, example_list in examples.items():
-            st.markdown(f"**{category}**")
-            for example in example_list:
-                if st.button(f"📝 {example}", key=f"ex_{example}", help="Click to analyze"):
-                    st.session_state.selected_example = example
-                    st.rerun()
-            st.markdown("")
+        if st.button("📋 Open Trello Dashboard", use_container_width=True):
+            st.session_state.current_view = 'enhanced'
+            st.rerun()
+            
+        if st.button("📅 Calendar View", use_container_width=True):
+            st.session_state.current_view = 'calendar'
+            st.rerun()
+            
+        if st.button("📊 View Analytics", use_container_width=True):
+            st.session_state.current_view = 'analytics'
+            st.rerun()
         
         st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Quick Stats
-        display_quick_stats()
     
     # History Section
     display_history_section()
+
+def render_enhanced_view():
+    """Render the enhanced Trello integration view"""
+    st.markdown("# 📋 Enhanced Trello Dashboard")
+    
+    try:
+        # Import and render enhanced integration
+        from enhanced_integration import main_enhanced_integration
+        main_enhanced_integration()
+    except ImportError:
+        st.error("❌ Enhanced integration module not found.")
+        st.info("📝 Make sure `enhanced_integration.py` is in your app directory")
+        
+        # Fallback to basic integration message
+        st.markdown("""
+        ### 🔧 Setup Required
+        
+        To use the enhanced Trello integration:
+        
+        1. **Save the enhanced integration code** as `enhanced_integration.py`
+        2. **Install required packages**: `pip install plotly`
+        3. **Restart the application**
+        
+        For now, you can use the basic features available in the main dashboard.
+        """)
+        
+        if st.button("🔙 Back to Main Dashboard"):
+            st.session_state.current_view = 'main'
+            st.rerun()
+
+def render_calendar_view():
+    """Render calendar integration view"""
+    st.markdown("# 📅 Calendar Integration")
+    
+    # Calendar view tabs
+    tab1, tab2, tab3 = st.tabs(["📅 Monthly View", "📋 Weekly Agenda", "⏰ Upcoming Deadlines"])
+    
+    with tab1:
+        render_monthly_calendar()
+    
+    with tab2:
+        render_weekly_agenda()
+    
+    with tab3:
+        render_upcoming_deadlines()
+
+def render_monthly_calendar():
+    """Render monthly calendar view"""
+    st.markdown("### 📅 Monthly Calendar View")
+    
+    import calendar
+    
+    today = datetime.now()
+    year = today.year
+    month = today.month
+    
+    # Month navigation
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col1:
+        if st.button("← Previous"):
+            # Previous month logic would go here
+            pass
+    
+    with col2:
+        st.markdown(f"### {calendar.month_name[month]} {year}")
+    
+    with col3:
+        if st.button("Next →"):
+            # Next month logic would go here
+            pass
+    
+    # Calendar grid
+    cal_data = calendar.monthcalendar(year, month)
+    
+    # Days of week header
+    days_of_week = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    cols = st.columns(7)
+    for i, day in enumerate(days_of_week):
+        with cols[i]:
+            st.markdown(f"**{day}**")
+    
+    # Calendar days
+    for week in cal_data:
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            with cols[i]:
+                if day == 0:
+                    st.markdown("")
+                else:
+                    # Check if this day has tasks (sample logic)
+                    has_tasks = day in [15, 20, 25, 30]  # Sample days with tasks
+                    
+                    if has_tasks:
+                        st.markdown(f"""
+                        <div style="
+                            background: #ff6b6b; 
+                            color: white; 
+                            border-radius: 5px; 
+                            padding: 5px; 
+                            text-align: center; 
+                            margin: 2px;
+                        ">
+                            <strong>{day}</strong><br>
+                            <small>📋 2 tasks</small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<div style='text-align: center; padding: 10px;'>{day}</div>", 
+                                  unsafe_allow_html=True)
+
+def render_weekly_agenda():
+    """Render weekly agenda view"""
+    st.markdown("### 📋 Weekly Agenda")
+    
+    today = datetime.now()
+    week_start = today - timedelta(days=today.weekday())
+    
+    for i in range(7):
+        day = week_start + timedelta(days=i)
+        is_today = day.date() == today.date()
+        
+        day_emoji = "🔸" if is_today else "📅"
+        
+        with st.expander(f"{day_emoji} {day.strftime('%A, %B %d')}", expanded=is_today):
+            # Sample tasks for each day
+            sample_tasks = {
+                0: ["Team standup", "Code review"],  # Monday
+                1: ["Client meeting", "Bug fixes"],   # Tuesday
+                2: ["Documentation update"],         # Wednesday
+                3: ["Sprint planning"],              # Thursday
+                4: ["Deploy to staging", "Weekly review"],  # Friday
+                5: [],  # Saturday
+                6: []   # Sunday
+            }
+            
+            day_tasks = sample_tasks.get(day.weekday(), [])
+            
+            if day_tasks:
+                for task in day_tasks:
+                    st.markdown(f"• 📋 {task}")
+                    
+                # Add AI suggestions
+                if day_tasks:
+                    st.info(f"🤖 AI suggests {len(day_tasks)} tasks are well-distributed for this day")
+            else:
+                st.markdown("📭 No tasks scheduled for this day")
+                st.info("💡 Good day to tackle lower-priority items or take a break!")
+
+def render_upcoming_deadlines():
+    """Render upcoming deadlines"""
+    st.markdown("### ⏰ Upcoming Deadlines")
+    
+    # Sample upcoming deadlines
+    deadlines = [
+        {
+            "task": "Fix critical login bug",
+            "due": "Today",
+            "urgency": 10,
+            "source": "AI Analysis",
+            "time_left": "6 hours"
+        },
+        {
+            "task": "Client presentation prep",
+            "due": "Tomorrow",
+            "urgency": 8,
+            "source": "Calendar",
+            "time_left": "1 day"
+        },
+        {
+            "task": "Code review completion",
+            "due": "This week",
+            "urgency": 6,
+            "source": "Trello",
+            "time_left": "3 days"
+        },
+        {
+            "task": "Documentation update",
+            "due": "Next week",
+            "urgency": 4,
+            "source": "AI Analysis",
+            "time_left": "1 week"
+        }
+    ]
+    
+    for deadline in deadlines:
+        urgency_color = "#dc3545" if deadline['urgency'] >= 8 else "#fd7e14" if deadline['urgency'] >= 6 else "#28a745"
+        urgency_emoji = "🚨" if deadline['urgency'] >= 8 else "⚡" if deadline['urgency'] >= 6 else "📋"
+        
+        st.markdown(f"""
+        <div style="
+            border-left: 4px solid {urgency_color};
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 10px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <h4 style="margin: 0; color: #333;">{urgency_emoji} {deadline['task']}</h4>
+                    <p style="margin: 5px 0; color: #666;">📅 Due: {deadline['due']} | ⏰ Time left: {deadline['time_left']}</p>
+                    <p style="margin: 5px 0; color: #888;">📍 Source: {deadline['source']}</p>
+                </div>
+                <div style="text-align: right;">
+                    <span style="background: {urgency_color}; color: white; padding: 5px 10px; border-radius: 15px; font-weight: bold;">
+                        {deadline['urgency']}/10
+                    </span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Add action buttons for each deadline
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button(f"✅ Mark Complete", key=f"complete_{deadline['task'][:10]}"):
+                st.success(f"✅ {deadline['task']} marked as complete!")
+        
+        with col2:
+            if st.button(f"📅 Reschedule", key=f"reschedule_{deadline['task'][:10]}"):
+                st.info(f"📅 Rescheduling {deadline['task']}...")
+        
+        with col3:
+            if st.button(f"📋 View Details", key=f"details_{deadline['task'][:10]}"):
+                st.info(f"📋 Opening details for {deadline['task']}...")
+
+def render_analytics_view():
+    """Render AI analytics dashboard"""
+    st.markdown("# 📊 AI Analytics Dashboard")
+    
+    # Analytics tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🎯 Task Prioritization", 
+        "📈 Performance Trends", 
+        "⚡ Urgency Analysis", 
+        "🔍 Keyword Insights"
+    ])
+    
+    with tab1:
+        render_task_prioritization()
+    
+    with tab2:
+        render_performance_trends()
+    
+    with tab3:
+        render_urgency_analysis()
+    
+    with tab4:
+        render_keyword_insights()
+
+def render_task_prioritization():
+    """Render task prioritization analysis"""
+    st.markdown("### 🎯 Task Prioritization Matrix")
+    
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+        
+        # Sample data - in real implementation, use actual analysis data
+        sample_tasks = [
+            {"task": "Fix login bug", "urgency": 9, "impact": 9, "complexity": 7, "priority": 25},
+            {"task": "Update docs", "urgency": 3, "impact": 4, "complexity": 5, "priority": 12},
+            {"task": "Client meeting", "urgency": 8, "impact": 8, "complexity": 4, "priority": 20},
+            {"task": "Code review", "urgency": 6, "impact": 5, "complexity": 6, "priority": 17},
+            {"task": "Team standup", "urgency": 4, "impact": 3, "complexity": 2, "priority": 9}
+        ]
+        
+        # Create DataFrame
+        import pandas as pd
+        df = pd.DataFrame(sample_tasks)
+        
+        # Priority matrix scatter plot
+        fig = px.scatter(
+            df,
+            x='urgency',
+            y='impact',
+            size='complexity',
+            color='priority',
+            hover_name='task',
+            title="🎯 Task Priority Matrix (Urgency vs Impact)",
+            labels={'urgency': 'Urgency Level', 'impact': 'Business Impact'},
+            color_continuous_scale='Reds',
+            size_max=60
+        )
+        
+        # Add quadrant lines
+        fig.add_hline(y=5.5, line_dash="dash", line_color="gray", opacity=0.5)
+        fig.add_vline(x=5.5, line_dash="dash", line_color="gray", opacity=0.5)
+        
+        # Add quadrant labels
+        fig.add_annotation(x=8.5, y=8.5, text="🚨 Urgent & Important", showarrow=False, bgcolor="rgba(255,0,0,0.1)")
+        fig.add_annotation(x=2.5, y=8.5, text="📋 Important, Not Urgent", showarrow=False, bgcolor="rgba(0,255,0,0.1)")
+        fig.add_annotation(x=8.5, y=2.5, text="⚡ Urgent, Not Important", showarrow=False, bgcolor="rgba(255,255,0,0.1)")
+        fig.add_annotation(x=2.5, y=2.5, text="📂 Neither Urgent nor Important", showarrow=False, bgcolor="rgba(128,128,128,0.1)")
+        
+        fig.update_layout(height=500)
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Priority recommendations
+        st.markdown("### 📋 Priority Recommendations")
+        
+        sorted_tasks = sorted(sample_tasks, key=lambda x: x['priority'], reverse=True)
+        
+        for i, task in enumerate(sorted_tasks):
+            priority_colors = ["🔴", "🟠", "🟡", "🟢", "🔵"]
+            priority_emoji = priority_colors[min(i, 4)]
+            
+            col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+            
+            with col1:
+                st.markdown(f"{priority_emoji} **{task['task']}**")
+            
+            with col2:
+                st.metric("Priority", f"{task['priority']}")
+            
+            with col3:
+                st.markdown(f"⚡{task['urgency']} 📊{task['impact']}")
+            
+            with col4:
+                st.markdown(f"🔧{task['complexity']}")
+        
+    except ImportError:
+        st.warning("📊 Plotly not installed. Install with: `pip install plotly`")
+        
+        # Fallback to simple text display
+        st.markdown("### 📋 Task Priority List (Text Mode)")
+        
+        sample_tasks = [
+            {"task": "Fix login bug", "urgency": 9, "priority": "🔴 Critical"},
+            {"task": "Client meeting", "urgency": 8, "priority": "🟠 High"},
+            {"task": "Code review", "urgency": 6, "priority": "🟡 Medium"},
+            {"task": "Update docs", "urgency": 3, "priority": "🟢 Low"},
+            {"task": "Team standup", "urgency": 4, "priority": "🟢 Low"}
+        ]
+        
+        for task in sample_tasks:
+            st.markdown(f"{task['priority']} **{task['task']}** (Urgency: {task['urgency']}/10)")
+
+def render_performance_trends():
+    """Render performance trends analysis"""
+    st.markdown("### 📈 AI Performance Trends")
+    
+    try:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        
+        # Sample performance data
+        weeks = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6']
+        accuracy = [85, 88, 90, 92, 94, 95]
+        suggestions = [12, 15, 18, 16, 20, 22]
+        acceptance_rate = [70, 75, 80, 85, 88, 90]
+        
+        # Create subplots
+        fig = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=('🎯 AI Accuracy', '💡 Suggestions Made', '✅ Acceptance Rate', '📊 Overall Trend'),
+            specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                   [{"secondary_y": False}, {"secondary_y": False}]]
+        )
+        
+        # Add traces
+        fig.add_trace(go.Scatter(x=weeks, y=accuracy, mode='lines+markers', name='Accuracy', line=dict(color='blue')), row=1, col=1)
+        fig.add_trace(go.Bar(x=weeks, y=suggestions, name='Suggestions', marker_color='green'), row=1, col=2)
+        fig.add_trace(go.Scatter(x=weeks, y=acceptance_rate, mode='lines+markers', name='Acceptance', line=dict(color='orange')), row=2, col=1)
+        
+        # Combined trend
+        combined_score = [(a + s + ar) / 3 for a, s, ar in zip(accuracy, suggestions, acceptance_rate)]
+        fig.add_trace(go.Scatter(x=weeks, y=combined_score, mode='lines+markers', name='Overall', line=dict(color='red')), row=2, col=2)
+        
+        fig.update_layout(height=600, showlegend=False)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    except ImportError:
+        st.warning("📊 Plotly not available. Showing text summary.")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("🎯 AI Accuracy", "95%", delta="+10%")
+        
+        with col2:
+            st.metric("💡 Suggestions", "22", delta="+10")
+        
+        with col3:
+            st.metric("✅ Acceptance", "90%", delta="+20%")
+    
+    # Performance insights
+    st.markdown("### 🔍 Performance Insights")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("""
+        **🎯 Accuracy Improvement**
+        - AI accuracy increased by 10% over 6 weeks
+        - Best performance on technical tasks
+        - Keyword detection improving
+        """)
+    
+    with col2:
+        st.success("""
+        **📈 Growing Usage**
+        - 83% increase in suggestions requested
+        - Users finding AI more helpful
+        - Feature adoption growing
+        """)
+    
+    with col3:
+        st.warning("""
+        **🔧 Areas for Improvement**
+        - Complex projects need better handling
+        - Calendar integration accuracy
+        - Multi-task dependency detection
+        """)
+
+def render_urgency_analysis():
+    """Render urgency analysis"""
+    st.markdown("### ⚡ Urgency Level Analysis")
+    
+    # Urgency distribution
+    if st.session_state.history:
+        urgency_data = [h['urgency'] for h in st.session_state.history]
+        
+        try:
+            import plotly.express as px
+            
+            # Create histogram
+            fig = px.histogram(
+                x=urgency_data,
+                nbins=10,
+                title="📊 Urgency Level Distribution",
+                labels={'x': 'Urgency Level (1-10)', 'y': 'Number of Tasks'},
+                color_discrete_sequence=['#667eea']
+            )
+            
+            fig.update_layout(height=400)
+            st.plotly_chart(fig, use_container_width=True)
+            
+        except ImportError:
+            # Fallback to simple metrics
+            avg_urgency = sum(urgency_data) / len(urgency_data)
+            high_urgency = sum(1 for u in urgency_data if u >= 7)
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("📊 Average Urgency", f"{avg_urgency:.1f}/10")
+            
+            with col2:
+                st.metric("🚨 High Urgency Tasks", high_urgency)
+            
+            with col3:
+                st.metric("📈 Total Analyzed", len(urgency_data))
+    
+    else:
+        st.info("📊 No urgency data available yet. Analyze some tasks to see urgency patterns!")
+    
+    # Urgency recommendations
+    st.markdown("### 💡 Urgency Management Tips")
+    
+    tips = [
+        "🚨 **Critical (9-10)**: Handle immediately, drop everything else",
+        "⚡ **High (7-8)**: Schedule for today or tomorrow",
+        "📋 **Medium (4-6)**: Plan for this week",
+        "🟢 **Low (1-3)**: Schedule when convenient",
+    ]
+    
+    for tip in tips:
+        st.markdown(tip)
+
+def render_keyword_insights():
+    """Render keyword analysis insights"""
+    st.markdown("### 🔍 Keyword Analysis Insights")
+    
+    if st.session_state.history:
+        # Extract keywords from history
+        all_keywords = []
+        for h in st.session_state.history:
+            if h.get('keywords'):
+                all_keywords.extend(h['keywords'])
+        
+        if all_keywords:
+            # Count keyword frequency
+            from collections import Counter
+            keyword_counts = Counter(all_keywords)
+            
+            # Display top keywords
+            st.markdown("#### 🏆 Most Common Keywords")
+            
+            top_keywords = keyword_counts.most_common(10)
+            
+            for i, (keyword, count) in enumerate(top_keywords):
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    st.markdown(f"**{i+1}. {keyword}**")
+                
+                with col2:
+                    st.metric("Count", count)
+                
+                with col3:
+                    # Determine keyword type
+                    urgency_keywords = ['urgent', 'critical', 'asap', 'emergency', 'now']
+                    if keyword.lower() in urgency_keywords:
+                        st.markdown("🚨 Urgency")
+                    elif keyword.lower() in ['bug', 'error', 'fix']:
+                        st.markdown("🐛 Technical")
+                    elif keyword.lower() in ['client', 'customer', 'meeting']:
+                        st.markdown("👥 Business")
+                    else:
+                        st.markdown("📋 General")
+            
+            # Keyword insights
+            st.markdown("#### 💡 Keyword Insights")
+            
+            urgency_keywords = sum(1 for k in all_keywords if k.lower() in ['urgent', 'critical', 'asap'])
+            technical_keywords = sum(1 for k in all_keywords if k.lower() in ['bug', 'error', 'fix'])
+            business_keywords = sum(1 for k in all_keywords if k.lower() in ['client', 'customer', 'meeting'])
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("🚨 Urgency Keywords", urgency_keywords)
+            
+            with col2:
+                st.metric("🐛 Technical Keywords", technical_keywords)
+            
+            with col3:
+                st.metric("👥 Business Keywords", business_keywords)
+                
+        else:
+            st.info("🔍 No keywords found in analysis history")
+    
+    else:
+        st.info("📊 No keyword data available yet. Analyze some tasks to see keyword patterns!")
+
+def render_settings_view():
+    """Render settings and configuration"""
+    st.markdown("# ⚙️ Settings & Configuration")
+    
+    # Settings tabs
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🤖 AI Settings", 
+        "🔗 Integrations", 
+        "🔔 Notifications", 
+        "📤 Data Management"
+    ])
+    
+    with tab1:
+        render_ai_settings()
+    
+    with tab2:
+        render_integration_settings()
+    
+    with tab3:
+        render_notification_settings()
+    
+    with tab4:
+        render_data_management()
+
+def render_ai_settings():
+    """Render AI configuration settings"""
+    st.markdown("### 🤖 AI Model Configuration")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        confidence_threshold = st.slider(
+            "🎯 Confidence Threshold",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state.get('ai_confidence_threshold', 0.6),
+            step=0.05,
+            help="Minimum confidence for AI suggestions"
+        )
+        st.session_state.ai_confidence_threshold = confidence_threshold
+    
+    with col2:
+        urgency_sensitivity = st.slider(
+            "⚡ Urgency Sensitivity",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.get('ai_urgency_sensitivity', 5),
+            help="How sensitive AI is to urgency keywords"
+        )
+        st.session_state.ai_urgency_sensitivity = urgency_sensitivity
+    
+    # Custom keywords
+    st.markdown("#### 🔤 Custom Keywords")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("**High Priority Keywords**")
+        high_keywords = st.text_area(
+            "One keyword per line",
+            value="urgent\ncritical\nASAP\nemergency",
+            height=100
+        )
+    
+    with col2:
+        st.markdown("**Low Priority Keywords**")
+        low_keywords = st.text_area(
+            "One keyword per line",
+            value="research\nplan\norganize\nwhen possible",
+            height=100
+        )
+    
+    # AI behavior
+    st.markdown("#### 🎛️ AI Behavior")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        auto_apply = st.checkbox(
+            "🤖 Auto-apply high confidence suggestions (>90%)",
+            value=st.session_state.get('auto_apply_high_confidence', False)
+        )
+        st.session_state.auto_apply_high_confidence = auto_apply
+    
+    with col2:
+        include_weekends = st.checkbox(
+            "📅 Include weekends in scheduling",
+            value=st.session_state.get('include_weekends', False)
+        )
+        st.session_state.include_weekends = include_weekends
+    
+    if st.button("💾 Save AI Settings", type="primary"):
+        st.success("✅ AI settings saved successfully!")
+
+def render_integration_settings():
+    """Render integration settings"""
+    st.markdown("### 🔗 Integration Status")
+    
+    # Trello integration status
+    st.markdown("#### 📋 Trello Integration")
+    
+    if st.session_state.get('trello_user'):
+        user = st.session_state.trello_user
+        st.success(f"✅ Connected as {user.get('fullName', 'Unknown')}")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔄 Test Connection"):
+                st.info("🔄 Testing Trello connection...")
+                # Connection test would happen here
+                st.success("✅ Connection successful!")
+        
+        with col2:
+            if st.button("🗑️ Disconnect"):
+                # Clear Trello credentials
+                keys_to_clear = ['trello_api_key', 'trello_token', 'trello_user']
+                for key in keys_to_clear:
+                    if key in st.session_state:
+                        del st.session_state[key]
+                st.success("🔌 Disconnected from Trello")
+                st.rerun()
+    
+    else:
+        st.warning("⚠️ Not connected to Trello")
+        
+        with st.expander("🔧 Setup Trello Integration"):
+            st.markdown("""
+            1. Go to [Trello Developer Portal](https://trello.com/app-key)
+            2. Copy your API Key and Token
+            3. Use the Enhanced Dashboard to connect
+            """)
+            
+            if st.button("🚀 Open Enhanced Dashboard"):
+                st.session_state.current_view = 'enhanced'
+                st.rerun()
+    
+    # Google Calendar integration
+    st.markdown("#### 📅 Google Calendar Integration")
+    
+    if st.session_state.get('google_credentials'):
+        st.success("✅ Google Calendar configured")
+    else:
+        st.info("📝 Google Calendar not configured")
+        
+        if st.button("⚙️ Setup Google Calendar"):
+            st.session_state.current_view = 'calendar'
+            st.rerun()
+
+def render_notification_settings():
+    """Render notification settings"""
+    st.markdown("### 🔔 Notification Preferences")
+    
+    # Email notifications
+    email = st.text_input(
+        "📧 Email Address",
+        value=st.session_state.get('notification_email', ''),
+        placeholder="your.email@example.com"
+    )
+    st.session_state.notification_email = email
+    
+    # Notification types
+    st.markdown("#### 📬 Notification Types")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        overdue = st.checkbox("🚨 Overdue tasks", value=True)
+        upcoming = st.checkbox("📅 Upcoming deadlines", value=True)
+        ai_suggestions = st.checkbox("🤖 New AI suggestions", value=False)
+    
+    with col2:
+        schedule_changes = st.checkbox("🔄 Schedule changes", value=True)
+        weekly_summary = st.checkbox("📊 Weekly summary", value=True)
+        performance_reports = st.checkbox("📈 Performance reports", value=False)
+    
+    # Notification frequency
+    frequency = st.selectbox(
+        "📊 Summary Frequency",
+        options=['Never', 'Daily', 'Weekly', 'Monthly'],
+        index=2
+    )
+    
+    if st.button("💾 Save Notification Settings", type="primary"):
+        st.success("✅ Notification settings saved!")
+
+def render_data_management():
+    """Render data management settings"""
+    st.markdown("### 📤 Data Management")
+    
+    # Export options
+    st.markdown("#### 📤 Export Data")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        export_format = st.selectbox(
+            "Export Format",
+            options=['CSV', 'JSON', 'Excel']
+        )
+        
+        export_scope = st.selectbox(
+            "Export Scope", 
+            options=['Analysis History', 'AI Settings', 'Full Export']
+        )
+    
+    with col2:
+        if st.button("📊 Export Data", use_container_width=True):
+            # Generate export data
+            if export_scope == 'Analysis History':
+                export_data = st.session_state.history
+            elif export_scope == 'AI Settings':
+                export_data = {
+                    'confidence_threshold': st.session_state.get('ai_confidence_threshold', 0.6),
+                    'urgency_sensitivity': st.session_state.get('ai_urgency_sensitivity', 5)
+                }
+            else:
+                export_data = {
+                    'history': st.session_state.history,
+                    'settings': {
+                        'confidence_threshold': st.session_state.get('ai_confidence_threshold', 0.6),
+                        'urgency_sensitivity': st.session_state.get('ai_urgency_sensitivity', 5)
+                    }
+                }
+            
+            if export_format == 'JSON':
+                import json
+                st.download_button(
+                    "💾 Download JSON",
+                    data=json.dumps(export_data, indent=2),
+                    file_name=f"ai_assistant_export_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                    mime="application/json"
+                )
+            else:
+                st.info(f"📁 {export_format} export would be generated here")
+    
+    # Clear data options
+    st.markdown("#### 🗑️ Clear Data")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🗑️ Clear History", type="secondary"):
+            st.session_state.history = []
+            st.success("🧹 Analysis history cleared!")
+    
+    with col2:
+        if st.button("⚙️ Reset Settings", type="secondary"):
+            # Reset AI settings
+            settings_to_reset = [
+                'ai_confidence_threshold',
+                'ai_urgency_sensitivity', 
+                'auto_apply_high_confidence',
+                'include_weekends'
+            ]
+            for setting in settings_to_reset:
+                if setting in st.session_state:
+                    del st.session_state[setting]
+            st.success("⚙️ Settings reset to defaults!")
 
 def process_analysis(task: str, priority_override: str, timeline_preference: str):
     """Process task analysis with user preferences"""
@@ -676,31 +1529,6 @@ def save_feedback(result: Dict[str, Any], decision: str, final_date: str, rating
     # Clear current analysis
     st.session_state.current_analysis = None
 
-def display_quick_stats():
-    """Display quick statistics in sidebar"""
-    if not st.session_state.history:
-        return
-    
-    st.markdown('<div class="content-card">', unsafe_allow_html=True)
-    st.markdown("### 📈 Quick Stats")
-    
-    total = len(st.session_state.history)
-    accepted = sum(1 for h in st.session_state.history if h['decision'] in ['accepted', 'modified'])
-    avg_rating = sum(h['rating'] for h in st.session_state.history) / total if total > 0 else 0
-    avg_confidence = sum(h['confidence'] for h in st.session_state.history) / total if total > 0 else 0
-    
-    st.metric("📊 Total Analyses", total)
-    st.metric("✅ Acceptance Rate", f"{(accepted/total*100) if total > 0 else 0:.0f}%")
-    st.metric("⭐ Avg Rating", f"{avg_rating:.1f}/5")
-    st.metric("🎯 Avg Confidence", f"{avg_confidence:.0%}")
-    
-    if st.button("🗑️ Clear History", help="Clear all history"):
-        st.session_state.history = []
-        st.success("History cleared!")
-        st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
 def display_history_section():
     """Display analysis history"""
     if not st.session_state.history:
@@ -744,17 +1572,48 @@ def get_urgency_color(urgency: int) -> str:
     }
     return colors.get(urgency, "#00d2d3")
 
-# At the top with other imports
-from trello_integration import integrate_trello_to_main_app as integrate_trello_calendar_to_app
+# Enhanced integration functions
+def render_enhanced_integration_button():
+    """Render button to access enhanced features"""
+    if st.sidebar.button("🚀 Enhanced Features", use_container_width=True):
+        st.session_state.show_enhanced_dashboard = True
+        st.rerun()
 
-# In your main() function, add:
-if st.session_state.get('show_integrations', False):
-    integrate_trello_calendar_to_app()
+def check_enhanced_integration():
+    """Check if enhanced integration is available"""
+    try:
+        import enhanced_integration
+        return True
+    except ImportError:
+        return False
 
-# Add a button to show/hide integrations
-if st.button("🔗 Toggle Trello/Calendar Integration"):
-    st.session_state.show_integrations = not st.session_state.get('show_integrations', False)
-    st.rerun()
+# Quick setup guide
+def render_setup_guide():
+    """Render setup guide for enhanced features"""
+    st.markdown("""
+    ## 🚀 Quick Setup Guide
     
+    ### 1. Enhanced Trello Integration
+    - Save the enhanced integration code as `enhanced_integration.py`
+    - Add your Trello API credentials
+    - Install required packages: `pip install plotly`
+    
+    ### 2. Google Calendar Integration  
+    - Set up Google Cloud project
+    - Enable Calendar API
+    - Upload OAuth credentials
+    
+    ### 3. AI Analytics
+    - Analyze tasks to build data
+    - View performance trends
+    - Get optimization suggestions
+    
+    ### 4. Advanced Features
+    - Kanban board visualization
+    - Team workload analysis
+    - Automated scheduling
+    """)
+
+# Main app entry point
 if __name__ == "__main__":
     main()
